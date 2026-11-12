@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" role="img" aria-label="Pala Automática">
+  <rect width="192" height="192" rx="40" fill="#0b0e14"/>
+  <path d="M60 138V54h30c19 0 32 11 32 28s-13 28-32 28H78v28z" fill="#4f8cff"/>
+  <circle cx="132" cy="132" r="14" fill="#3ddc97"/>
+</svg>

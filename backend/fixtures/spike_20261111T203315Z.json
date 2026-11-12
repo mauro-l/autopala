@@ -1,0 +1,117 @@
+{
+  "generated_at": "20261111T203315Z",
+  "sources": {
+    "google": {
+      "report": {
+        "source": "google",
+        "rows": 0,
+        "elapsed_s": 7.9,
+        "with_description": 0,
+        "with_direct_url": 0,
+        "canonical_ats_url": 0,
+        "with_salary": 0,
+        "ar_or_remote_hits": 0,
+        "columns": [],
+        "locations": [],
+        "titles": [],
+        "error": null,
+        "params": {
+          "search_term": "react developer",
+          "google_search_term": "react developer jobs Argentina",
+          "location": "Argentina",
+          "results_wanted": 20,
+          "hours_old": 168
+        }
+      },
+      "records": []
+    },
+    "greenhouse": {
+      "report": {
+        "source": "greenhouse",
+        "rows": 0,
+        "elapsed_s": 6.4,
+        "with_description": 0,
+        "with_direct_url": 0,
+        "canonical_ats_url": 0,
+        "with_salary": 0,
+        "ar_or_remote_hits": 0,
+        "columns": [],
+        "locations": [],
+        "titles": [],
+        "error": null,
+        "params": {
+          "search_term": "react developer",
+          "location": "Argentina",
+          "results_wanted": 20
+        }
+      },
+      "records": []
+    },
+    "ashby": {
+      "report": {
+        "source": "ashby",
+        "rows": 0,
+        "elapsed_s": 6.5,
+        "with_description": 0,
+        "with_direct_url": 0,
+        "canonical_ats_url": 0,
+        "with_salary": 0,
+        "ar_or_remote_hits": 0,
+        "columns": [],
+        "locations": [],
+        "titles": [],
+        "error": null,
+        "params": {
+          "search_term": "react developer",
+          "location": "Argentina",
+          "results_wanted": 20
+        }
+      },
+      "records": []
+    },
+    "lever": {
+      "report": {
+        "source": "lever",
+        "rows": 0,
+        "elapsed_s": 6.5,
+        "with_description": 0,
+        "with_direct_url": 0,
+        "canonical_ats_url": 0,
+        "with_salary": 0,
+        "ar_or_remote_hits": 0,
+        "columns": [],
+        "locations": [],
+        "titles": [],
+        "error": null,
+        "params": {
+          "search_term": "react developer",
+          "location": "Argentina",
+          "results_wanted": 20
+        }
+      },
+      "records": []
+    },
+    "wellfound": {
+      "report": {
+        "source": "wellfound",
+        "rows": 0,
+        "elapsed_s": 0.3,
+        "with_description": 0,
+        "with_direct_url": 0,
+        "canonical_ats_url": 0,
+        "with_salary": 0,
+        "ar_or_remote_hits": 0,
+        "columns": [],
+        "locations": [],
+        "titles": [],
+        "error": null,
+        "params": {
+          "search_term": "react",
+          "location": "Argentina",
+          "results_wanted": 20
+        }
+      },
+      "records": []
+    }
+  }
+}

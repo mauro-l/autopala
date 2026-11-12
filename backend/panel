@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Local control panel. Open it, press "Iniciar", and close it to stop everything.
+set -euo pipefail
+cd "$(dirname "$0")"
+exec .venv/bin/python -m app.panel "$@"

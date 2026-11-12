@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets — only the example file is tracked
+.env
+.env.*
+!.env.example
+
+# Node / frontend
+node_modules/
+dist/
+.astro/
+
+# Local data
+*.sqlite
+*.sqlite3
+*.db
+
+# Editors / OS
+.DS_Store
+Thumbs.db

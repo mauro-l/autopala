@@ -102,7 +102,12 @@ export default function OfferBoard() {
     if (!client) return "Falta configuración.";
     const { error } = await client.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${window.location.origin}/` },
+      options: {
+        emailRedirectTo: `${window.location.origin}/`,
+        // Only an account that already exists may request a link. Without this
+        // anyone could type an address, get a session and race for ownership.
+        shouldCreateUser: false,
+      },
     });
     if (!error) return null;
     console.error("signInWithOtp failed", error);

@@ -391,14 +391,14 @@ class TestEnrichmentScoringEffect:
     def test_enrichment_is_not_monotonic_when_the_jd_states_experience(self):
         from app.scoring import score_job
 
-        # Real case: 'Desarrollador Senior React + TypeScript - Trabajo Remoto'
-        # scored 52 title-only and 43 enriched, because the JD says
-        # "Mas de 4 anos de experiencia" and the empty-description default is 15.
+        # A JD that states a requirement can lower the experience score: an
+        # empty description defaults to the generous top of the curve, while
+        # "Mas de 4 anos" lands on the floor.
         job = make_job(title="React Developer", description="")
         enriched = dataclasses.replace(job, description="Mas de 4 anos de experiencia en desarrollo.")
 
         plain, rich = score_job(job, today=TODAY), score_job(enriched, today=TODAY)
 
-        assert plain.parts["experience"] == 15
-        assert rich.parts["experience"] == 6
+        assert plain.parts["experience"] == 10
+        assert rich.parts["experience"] == 0
         assert rich.total < plain.total

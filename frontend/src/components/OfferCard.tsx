@@ -15,6 +15,8 @@ export default function OfferCard({ offer }: Props) {
   const skills = breakdown?.matched_skills ?? [];
   const years = breakdown?.required_years ?? null;
   const level = breakdown?.seniority_level ?? null;
+  const englishRequired = breakdown?.english_required === true;
+  const unpaid = breakdown?.unpaid === true;
   const sources = offer.job_sources ?? [];
   const link = applyUrl(offer);
   const remote = isRemote(offer);
@@ -59,6 +61,8 @@ export default function OfferCard({ offer }: Props) {
               {years} {years === 1 ? "año" : "años"}
             </span>
           ) : null}
+          {englishRequired ? <span className="tag is-warn">inglés</span> : null}
+          {unpaid ? <span className="tag is-warn">no remunerada</span> : null}
         </p>
 
         <div className="meters">

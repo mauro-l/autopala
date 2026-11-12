@@ -1,7 +1,7 @@
 export type ScoreTier = "high" | "mid" | "low";
 
 /** Mirrors the backend thresholds: only the top tier triggers a notification. */
-export const NOTIFY_MIN = 85;
+export const NOTIFY_MIN = 80;
 export const SOLID_MIN = 70;
 
 export function scoreTier(score: number | null): ScoreTier {
@@ -27,7 +27,13 @@ export function formatAge(value: string | null): string {
   return months === 1 ? "hace un mes" : `hace ${months} meses`;
 }
 
-export type ScorePartKey = "stack" | "seniority" | "experience" | "location" | "recency";
+export type ScorePartKey =
+  | "role"
+  | "stack"
+  | "seniority"
+  | "experience"
+  | "location"
+  | "recency";
 
 export type ScorePart = {
   key: ScorePartKey;
@@ -40,9 +46,10 @@ export type ScorePart = {
  * scale, and the UI must not require a backend round trip to draw a bar.
  */
 export const SCORE_PARTS: readonly ScorePart[] = [
-  { key: "stack", label: "Stack", max: 40 },
+  { key: "role", label: "Rol", max: 15 },
+  { key: "stack", label: "Stack", max: 30 },
   { key: "seniority", label: "Nivel", max: 25 },
-  { key: "experience", label: "Exp.", max: 15 },
+  { key: "experience", label: "Exp.", max: 10 },
   { key: "location", label: "Ubicación", max: 10 },
   { key: "recency", label: "Recencia", max: 10 },
 ];

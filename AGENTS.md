@@ -53,33 +53,47 @@ Other verified quirks: `is_remote` arrives as the string `"False"` (cast it). Be
 
 ## Domain facts (drive filters and scoring)
 
-- Target user stack: React, JavaScript, TypeScript, Node.js, Express, MongoDB.
-- Target level: trainee / junior, plus flexible roles asking 2–3 years (do not auto-discard on the years requirement).
-- Location: Argentina (remote + hybrid AMBA). Primary sources: LinkedIn, Indeed (`country_indeed="Argentina"`).
+The target profile lives in `writing-block.md`; the scorer and the search terms encode it.
+
+- **Frontend first.** Target skills: JavaScript, TypeScript, React, Next.js, Vite, React Native with Expo, HTML/CSS, Tailwind and DaisyUI. Node.js, Express, MongoDB, PostgreSQL, Supabase, Prisma, Zod, Winston and Swagger are complements and weigh a fraction.
+- **Level:** trainee / junior / entry-level / pasantía, plus roles asking **up to 2 years**. Three years is already a stretch and four or more is out of range.
+- **Location:** Quilmes, Buenos Aires. Remote within Argentina first, remote for LatAm second, hybrid or on-site in Quilmes and the AMBA (CABA included) third; international remote only when the employer can hire in Argentina, which a row cannot prove.
+- **Backend-heavy roles are out**, including Full Stack postings whose core is schema design, query tuning or service architecture. Primary sources: LinkedIn, Indeed (`country_indeed="Argentina"`).
 
 ## Scoring (implemented, `backend/app/scoring.py`)
 
-Five weighted dimensions totalling 0–100. `score_job()` is pure and deterministic: the same row always scores the same, and a re-tune needs no new scrape because the raw payload is stored beside the row. An LLM pass may later add nuance but can never be required.
+Six weighted dimensions totalling 0–100. `score_job()` is pure and deterministic: the same row always scores the same, and a re-tune needs no new scrape because the raw payload is stored beside the row. An LLM pass may later add nuance but can never be required.
 
 | dimension | budget | rule |
 | --- | --- | --- |
-| `stack` | 40 | skill weights sum to 50, so a posting naming every target technology saturates the budget instead of needing all six: react 12, typescript 10, javascript 10, node 8, express 5, mongodb 5 |
-| `seniority` | 25 | junior 25, mid 18, unknown 12, senior 0 |
-| `experience` | 15 | no mention or ≤1 year → 15, ≤3 → 12, ≤5 → 6, more → 0 |
-| `location` | 10 | remote 10, empty 5, Argentina 8, anything else 0 |
+| `role` | 15 | frontend 15, mobile 12, fullstack 10, unknown 8, backend 0. Read from the title first, from the body only when the title is silent |
+| `stack` | 30 | weights sum to 57 so the frontend core saturates the budget: react 11, typescript 9, javascript 8, next 6, react native 5, tailwind 3, html 3, css 3, node 3, supabase 2, express 2, prisma 1, mongodb 1 |
+| `seniority` | 25 | junior 25, unknown 12, mid 4, senior 0 |
+| `experience` | 10 | no mention or ≤1 year → 10, ≤2 → 8, ≤3 → 2, more → 0 |
+| `location` | 10 | remote 10, remote with a foreign marker 5, on-site AMBA 9, on-site elsewhere in Argentina 7, empty on-site 4, unknown 3, foreign on-site 0 |
 | `recency` | 10 | no date 4, ≤2 days 10, ≤7 → 8, ≤14 → 5, ≤30 → 2, older 0 |
 
-Thresholds: `NOTIFY_THRESHOLD = 85` and `SILENT_THRESHOLD = 70`. Only `total >= 85` notifies; everything else is stored silently. `ScoreBreakdown.to_payload()` is the exact shape written to the `score_breakdown` column, and `sum(parts) == total` always holds.
+Thresholds: `NOTIFY_THRESHOLD = 80` and `SILENT_THRESHOLD = 70`. Only `total >= 80` notifies, and a notification is one message per qualifying offer — never one per stored row; everything else is stored silently. `ScoreBreakdown.to_payload()` is the exact shape written to the `score_breakdown` column, and `sum(parts) == total` always holds.
 
-Rules that are easy to break, all pinned by the 51 tests in `backend/tests/test_scoring.py`:
+The breakdown also carries `role_focus`, `english_level`, `english_required`, `unpaid` and `degree_required`. They are **reported, never scored**: the profile forbids presupposing an English level, so a high-scoring posting is not downgraded for asking for one — the card shows an `inglés` chip instead, and `no remunerada` marks an unpaid internship.
 
+Rules that are easy to break, all pinned by the 80 tests in `backend/tests/test_scoring.py`:
+
+- **Role, not keywords, decides the ceiling.** A backend title scores 0 in `role` no matter how many frontend words the JD names: a "Backend Developer" with Node, TypeScript, Express and MongoDB and 1 year of experience reaches **57** and can never notify. This is the fix for the measured inversion where a "FullStack Developer SENIOR/SSR Angular/NodeJS" outranked every real frontend row.
+- **`SENIOR/SSR` is senior.** `semi senior` and `ssr` are masked to `mid` before the senior check, so `Semi Senior` and `SSR` stay mid while a title naming both `SENIOR` and `SSR` is senior.
+- **Body prose must not make a role senior.** The title uses bare senior words (`lead`, `staff`, `principal`); the body only accepts full phrases (`senior level`, `tech lead`, `engineering manager`). Measured false positive: "lead the activities of a team" and "Principal responsibilities include..." used to zero the seniority budget of a plain "React Developer" row.
+- **A mid-level role cannot reach the threshold.** `role 15 + stack 30 + mid 4 + experience 8 + location 10 + recency 10 = 77`. That ceiling is deliberate, from "no recomiendes puestos que sean en realidad Semi-Senior/Mid-Level".
+- **`all levels` / `todos los niveles` count as junior-accepting**, because an open-level posting admits a junior.
 - **The title outranks the description for seniority.** A junior title stays junior even when the body mentions working alongside senior engineers — that is exactly what made naive keyword counting unusable.
-- **JS compounds are collapsed before matching** (`node.js`, `next.js`, `vue.js`, `express.js`, `three.js`, `nest.js`, `react.js` → their base token). `"node.js"` normalizes to `"node js"`, so left alone its trailing `js` would also count as a JavaScript mention.
+- **JS compounds are collapsed before matching** (`node.js`, `vue.js`, `express.js`, `three.js`, `nest.js`, `react.js`, `tailwind.css` → their base token). `"node.js"` normalizes to `"node js"`, so left alone its trailing `js` would also count as a JavaScript mention.
+- **`next.js` collapses to the single token `nextjs`.** Bare `next` is ordinary English ("next steps") and would match unrelated postings.
 - **Phrases match on letter/digit boundaries**, so `js` never matches inside another word.
 - **Years parsing reads a lighter normalization** (`_deaccent`) than `normalize_text`, because `normalize_text` deletes hyphens and would destroy `"2-4 años"`. Ranges are read first; any number above 10 years is treated as company boilerplate rather than a requirement.
-- **Foreign location markers are tested before Argentine ones**, so `"Córdoba, España"` scores 0 while `"B, AR"` scores 8.
+- **Foreign location markers are tested before Argentine ones**, so `"Córdoba, España"` scores 0 while `"Córdoba, Argentina"` scores 7 and `"Quilmes, Buenos Aires"` scores 9.
 
-**Measured ceiling, and the open problem it exposes:** over the 23 real spike rows only 3 carry a description. With no description the stack dimension caps at 30, so the best title-only total is **61** and the best with-description total is **65**. A non-remote Argentine match tops out at **98** (only a remote one reaches 100). Since LinkedIn is the priority source and its cards carry no description, no LinkedIn row can reach 85 on its own — addressed by the enrichment layer below, which is the only thing that can lift the stack dimension.
+**Measured ceiling:** a title-only LinkedIn card, which is the normal case because LinkedIn guest cards carry no description, now reaches **81** when the title says frontend, junior, React, remote and today — it notifies without any JD. One with a description reaches 100. The enrichment layer is no longer the only path to the threshold; it is what separates two similar title-only rows.
+
+**Measured on the 20-row live corpus (2026-11-12, after the re-tune):** the best row is 68 (`Software Engineer II - React Native`, international, 3 years), then 67 (`React Developer`, Capgemini, BA), 64 (`Mobile Engineer (Argentina, All Levels)`) and 54 (`Desarrollador Frontend (UX/UI)`); every senior posting fell to 28–52 and the former top row dropped from 73 to 52. **Zero rows notify**, because that feed was scraped with the old backend-leaning terms and holds no junior frontend React posting in Argentina. The stored scores were recomputed and rewritten with the new model; the next collection re-scores whatever it scrapes.
 
 ## Enrichment (implemented, `backend/app/enrich.py`, tested)
 
@@ -94,14 +108,14 @@ Rules that are easy to break, all pinned in `backend/tests/test_enrich.py`:
 - **The guest endpoint itself**: `GET https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{id}` needs a realistic `User-Agent` and `Accept-Language`, plain `urllib.request`, no new dependency. Measured 200 and ~2.7k chars of JD on 8 requests with 2s pacing, zero throttling.
 - **Pacing lives in the fetcher**, never in `enrich_jobs`: sleep only *between* calls, `delay_seconds=2.0`, `timeout=25.0`, with `sleep` and `transport` injectable so tests never touch the network.
 - **`429` and `999` stop the batch immediately** (`throttled=True`) and return what was gathered; other failures count as `failed` without dropping the row.
-- **`DEFAULT_MIN_TITLE_SCORE = 50`, not 30**: measured with the real scorer, every row clears 42 from seniority/experience/location/recency alone — "Cocinero" scores 42 — so a 30 cutoff filters nothing.
+- **`DEFAULT_MIN_TITLE_SCORE = 50`, not 30**: measured with the real scorer, a plainly unrelated title still clears 38 from role/seniority/experience/location/recency alone — "Cocinero" scores 38 — so a 30 cutoff filters nothing.
 - **The job id** comes from digits in `source_job_id`, else `(\d{6,})` in the URL (handles slugged URLs). A 6-digit floor is what stops a year or a query fragment from being mistaken for an id.
 - The description parser is a depth-aware `html.parser.HTMLParser` matching the `show-more-less-html__markup` class. A regex capture was rejected: nested `div`s truncated it and left a stray `>`.
 - `enrich_jobs` returns `dataclasses.replace`d copies and never mutates its input.
 
-**Enrichment is NOT monotonic — do not "fix" this.** Measured live: 'Desarrollador Senior React + TypeScript - Trabajo Remoto' scored **52 title-only and 43 enriched**, because the JD says "Más de 4 años de experiencia" and an empty description defaults to the generous 15 experience points, while a stated 4 years scores 6. The company-age phrase "llevamos 15 años" is correctly ignored by `_MAX_PLAUSIBLE_YEARS`. A JD raises `stack` — the only path to the threshold — but it can lower `experience`, so the title-only score is a priority heuristic, not a lower bound.
+**Enrichment is NOT monotonic — do not "fix" this.** Measured live: 'Desarrollador Senior React + TypeScript - Trabajo Remoto' scored **46 title-only and 43 enriched**, because the JD says "Más de 4 años de experiencia" and an empty description defaults to the generous 10 experience points, while a stated 4 years scores 0. The company-age phrase "llevamos 15 años" is correctly ignored by `_MAX_PLAUSIBLE_YEARS`. A JD raises `stack` and can reveal the role — the paths to the threshold — but it can lower `experience`, so the title-only score is a priority heuristic, not a lower bound.
 
-**Current state on the 23-row spike corpus:** tier 1 copies **0** descriptions (all 3 described rows are Indeed-only, so no LinkedIn sibling shares their key — the mechanism only fires on a genuine cross-source duplicate). 6 rows clear the fetch cutoff, best title-only 61. The stack dimension is what blocks 85, and only a JD can supply it.
+**Current state on the live corpus:** tier 1 copies **0** descriptions (all described rows are Indeed-only, so no LinkedIn sibling shares their key — the mechanism only fires on a genuine cross-source duplicate). The stack and level dimensions are what block 80 on a senior or level-silent row; a junior frontend title reaches it without any JD.
 
 ## Collection worker (implemented, `backend/app/worker.py`, tested)
 
@@ -112,7 +126,7 @@ Orchestrates `scrape → adapt → enrich → dedupe → score → upsert`, then
 Schedule is local Argentina time (`SCRAPE_TIMEZONE`, default `America/Argentina/Buenos_Aires`, with a fixed `-03` fallback when the IANA database is unavailable):
 
 - one collection slot per hour in `COLLECTION_WINDOW = (9, 16)` — seven slots, inclusive start, exclusive end;
-- LinkedIn runs every slot with `LINKEDIN_TERMS` (7 terms) rotating one per hour, `items=20`, `hours_old=168`;
+- LinkedIn runs every slot with `LINKEDIN_TERMS` (9 frontend-first terms, Spanish and English) rotating one per hour, `items=20`, `hours_old=168`. The list length must not divide 24, or the same hour would receive the same term every day;
 - Indeed runs only at `INDEED_HOURS = (9, 12, 15)`, `items=30`, `country_indeed="Argentina"`, and **never** receives `hours_old`;
 - the curated ATS boards run once at `ATS_HOUR = 9` via the public board APIs (`greenhouse`, `ashby`), never through jobdrop.
 
@@ -137,7 +151,7 @@ The user wants explicit control over when the worker runs, so **nothing autostar
 - A button inside the hosted PWA cannot do this: the PWA is static and remote, so it has no way to start a process on the PC. The only alternative would be an always-on bridge, which the user rejected.
 - Consequence to keep in mind: while the panel is closed there is no collection, and missed scheduled slots are not replayed. LinkedIn's `hours_old=168` recovers the last seven days; the 9:00 ATS pass and the Indeed slots are simply skipped.
 
-**First live collection (executed 2026-11-12 11:24 ART, `--once`):** the 11:00 slot ran LinkedIn only, 20 rows in 14 s, all 20 written (20 `job_sources`), 1 `scrape_runs` row with `status: ok`. Enrichment fetched 5 of the 8 allowed details with no throttling, so 5 of 20 rows carry a JD. Best score **73** (`parts`: stack 28, seniority 18, experience 12, location 5, recency 10) and **0 notifications** — exactly the ceiling `AGENTS.md` predicts for LinkedIn-only rows, since `stack` still has 12 of its 40 budget unclaimed. The `score_breakdown` shape is `{parts: {stack, seniority, experience, location, recency}, total, matched_skills, required_years, seniority_level}`; query `score_breakdown->'parts'->>'stack'`, not `score_breakdown->>'stack'`. The first 85+ candidate therefore has to come from an Indeed slot (9/12/15) or the 9:00 ATS boards.
+**First live collection (executed 2026-11-12 11:24 ART, `--once`):** the 11:00 slot ran LinkedIn only, 20 rows in 14 s, all 20 written (20 `job_sources`), 1 `scrape_runs` row with `status: ok`. Enrichment fetched 5 of the 8 allowed details with no throttling, so 5 of 20 rows carry a JD. Best score **73** (`parts`: stack 28, seniority 18, experience 12, location 5, recency 10) and **0 notifications** — exactly the ceiling `AGENTS.md` predicts for LinkedIn-only rows, since `stack` still has 12 of its 40 budget unclaimed. The `score_breakdown` shape is `{parts: {stack, seniority, experience, location, recency}, total, matched_skills, required_years, seniority_level}`; query `score_breakdown->'parts'->>'stack'`, not `score_breakdown->>'stack'`. The first 80+ candidate therefore has to come from an Indeed slot (9/12/15) or the 9:00 ATS boards.
 
 `SupabaseWriter` sends the key on `apikey` always, and adds `Authorization: Bearer <key>` **only when the key starts with `eyJ`**. Legacy `service_role` keys are JWTs and work on either header; new `sb_secret_*` keys are not JWTs and PostgREST rejects them on `Authorization`, so they must travel on `apikey` alone. Both paths are pinned in `backend/tests/test_worker.py`.
 
@@ -200,9 +214,11 @@ Default privileges for `tables`, `sequences` and `functions` are now revoked for
 Astro 5 + React 19 islands, `output: "static"`, built with **npm** (no Tailwind, no CDN assets). One page (`src/pages/index.astro`) renders `<OfferBoard client:only="react" />`; the island is the whole app and reads Supabase directly from the browser.
 
 - **Read-only by design.** The UI only runs `SELECT`s through the publishable key plus the authenticated RLS policies; it never writes. Writable owner state (`seen`/`applied`) does not exist yet.
+- **The card shows six meters** — Rol, Stack, Nivel, Exp., Ubicación, Recencia — mirroring `SCORE_PARTS` in `src/lib/format.ts`, which duplicates the backend budgets on purpose so drawing a bar needs no round trip. A missing part renders as an empty bar, so rows scored by an older model still display. `inglés` and `no remunerada` chips come from `english_required` and `unpaid`; they are warnings, never score penalties.
 - **Login is email + password** (`signInWithPassword`). There is no magic link and no signup: the owner account is created once in the Supabase dashboard, so nobody can mint a session from the site. The session is persisted by the client and, after it appears, the island calls `rpc("claim_ownership")` exactly once; `true` means this account claimed the app. The deployed origin must be in the Supabase redirect allow-list only if a recovery flow is added later.
 - **`frontend/.env`** carries `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY` (the publishable key — safe to ship) and `PUBLIC_VAPID_PUBLIC_KEY`. `PUBLIC_*` values are inlined at build time; when they are missing `isConfigured` is false and the app renders a "Falta configuración" panel, so a keyless build still succeeds and leaks nothing.
-- **The PIN is a local screen lock**, not authentication. `src/lib/pin.ts` stores a PBKDF2-SHA256 hash (150k iterations, random salt) in `localStorage` under `pala.pin.<user id>` and never the PIN itself. `PinLock` sits between the session and the dashboard and unlocks in memory only, so reopening the app re-locks it; `PinSettings` in the topbar sets, changes or removes it. "Olvidé el PIN" clears the local record and signs out, because the password is the real credential. RLS still decides what the session can read, so the PIN grants nothing on its own.
+- **The PIN is a local screen lock**, not authentication. `src/lib/pin.ts` stores a PBKDF2-SHA256 hash (150k iterations, random salt) in `localStorage` under `pala.pin.<user id>` and never the PIN itself. Unlocking writes a timestamp under `pala.pin.open.<user id>` with a **30-minute grace window** (`UNLOCK_TTL_MS`), so reopening the app within it does not ask again while a longer absence re-locks; a 30-second timer and `visibilitychange` re-evaluate the gate. `PinLock` sits between the session and the dashboard; `PinSettings` sets, changes or removes it; signing out and "Olvidé el PIN" clear the record, because the password is the real credential. RLS still decides what the session can read, so the PIN grants nothing on its own.
+- **The gear button opens `SettingsPanel`**, a bottom sheet holding only device configuration: the push toggle and the PIN. Job data stays in the dashboard, so the topbar carries no settings controls of its own.
 - **Type narrowing is manual:** capture `const client = supabase;` inside each callback or effect, because the `isConfigured` boolean does not narrow the module-level `supabase` and `astro check` fails otherwise. `FormEvent` is deprecated in this toolchain — handlers take no event and call `preventDefault()` at the JSX call site.
 - `npm run build` and `npx astro check` both pass with 0 errors; `dist/` is a static bundle with no key material when `.env` is absent.
 

@@ -5,7 +5,10 @@ the same and a re-tune needs no new scrape (the raw payload is stored beside the
 row). An LLM pass may later add nuance, but it is optional and can never be
 required: this module alone decides whether an offer is worth a notification.
 
-Weight budgets: stack 40, seniority 25, experience 15, location 10, recency 10.
+Weight budgets: role 15, stack 30, seniority 25, experience 10, location 10,
+recency 10. The shape follows the target profile: a frontend junior job in
+Argentina is a strong match even with no description, and a senior backend job
+can never reach the notification threshold no matter which keywords it names.
 """
 
 from __future__ import annotations
@@ -19,38 +22,51 @@ from typing import Mapping
 from app.models import NormalizedJob
 from app.normalize import normalize_text
 
-NOTIFY_THRESHOLD = 85
+NOTIFY_THRESHOLD = 80
 SILENT_THRESHOLD = 70
 
 MAX_SCORES: Mapping[str, int] = {
-    "stack": 40,
+    "role": 15,
+    "stack": 30,
     "seniority": 25,
-    "experience": 15,
+    "experience": 10,
     "location": 10,
     "recency": 10,
 }
 
-# Skill weights deliberately sum to 50 so that a posting mentioning every target
-# technology saturates the 40-point budget instead of needing all six to reach it.
+# Skill weights deliberately sum well above the 30-point budget so that a posting
+# naming the frontend core saturates it instead of needing every single tool.
+# Frontend carries most of the weight; the backend stack is a complement and is
+# worth a fraction, so "Angular/NodeJS" cannot outscore "React/TypeScript".
 _SKILL_WEIGHTS: tuple[tuple[str, int, tuple[str, ...]], ...] = (
-    ("react", 12, ("react", "reactjs")),
-    ("typescript", 10, ("typescript",)),
-    ("javascript", 10, ("javascript", "js", "ecmascript", "es6")),
-    ("node", 8, ("node", "nodejs")),
-    ("express", 5, ("express", "expressjs")),
-    ("mongodb", 5, ("mongodb", "mongo")),
+    ("react", 11, ("react", "reactjs")),
+    ("typescript", 9, ("typescript",)),
+    ("javascript", 8, ("javascript", "js", "ecmascript", "es6")),
+    ("next", 6, ("nextjs",)),
+    ("react native", 5, ("react native",)),
+    ("tailwind", 3, ("tailwind", "daisyui")),
+    ("html", 3, ("html", "html5")),
+    ("css", 3, ("css", "css3", "sass", "scss")),
+    ("node", 3, ("node", "nodejs")),
+    ("supabase", 2, ("supabase",)),
+    ("express", 2, ("express", "expressjs")),
+    ("prisma", 1, ("prisma",)),
+    ("mongodb", 1, ("mongodb", "mongo")),
 )
 
 # "node.js" normalizes to "node js"; left alone, its trailing "js" would also
 # count as a JavaScript mention. Each compound collapses to its base token.
+# `next js` folds into a single token because bare "next" is ordinary English
+# ("next steps") and would match unrelated postings.
 _JS_COMPOUNDS = {
     "node js": "node",
-    "next js": "next",
+    "next js": "nextjs",
     "vue js": "vue",
     "express js": "express",
     "three js": "three",
     "nest js": "nest",
     "react js": "react",
+    "tailwind css": "tailwind",
 }
 
 _JUNIOR_MARKERS = (
@@ -66,10 +82,23 @@ _JUNIOR_MARKERS = (
     "entry level",
     "graduate",
     "primer empleo",
+    "intern",
+    "internship",
+    "all levels",
+    "todos los niveles",
 )
 
-_MID_MARKERS = ("semi senior", "ssr", "mid level", "mid")
+_MID_MARKERS = ("mid level", "mid", "semi senior", "ssr")
+_MID_PHRASES = ("mid level", "nivel mid", "perfil mid", "semi senior", "ssr")
 
+# Masked before the senior check, because "semi senior" and "ssr" contain a
+# senior token but describe a mid-level role.
+_SENIORITY_COMPOUNDS = {"semi senior": "mid", "ssr": "mid"}
+
+# A title is a reliable place to look for a bare senior word. A job body is
+# not: "lead the activities of a team", "principal responsibilities" and "our
+# staff" are ordinary prose, and matching them used to zero out the seniority
+# budget of perfectly good postings. The body therefore needs a full phrase.
 _SENIOR_MARKERS = (
     "senior",
     "sr",
@@ -83,12 +112,126 @@ _SENIOR_MARKERS = (
     "head of",
 )
 
-_AR_LOCATION_MARKERS = (
-    "argentina",
-    "buenos aires",
+_SENIOR_PHRASES = (
+    "senior developer",
+    "senior engineer",
+    "senior software",
+    "senior frontend",
+    "senior front end",
+    "senior backend",
+    "senior react",
+    "senior full",
+    "senior level",
+    "senior position",
+    "senior role",
+    "experiencia senior",
+    "perfil senior",
+    "nivel senior",
+    "tech lead",
+    "team lead",
+    "lead developer",
+    "lead engineer",
+    "engineering manager",
+    "staff engineer",
+    "principal engineer",
+    "software architect",
+    "arquitecto de software",
+    "lider tecnico",
+)
+
+# Role is read from the title first: "FullStack Developer SENIOR/SSR" is a
+# fullstack job even when the body mentions React components.
+_FULLSTACK_MARKERS = ("fullstack", "full stack")
+_FRONTEND_MARKERS = (
+    "frontend",
+    "front end",
+    "frontend developer",
+    "desarrollador frontend",
+    "desarrollador front",
+    "desarrollador web",
+    "maquetador",
+    "ui developer",
+    "developer react",
+    "react developer",
+)
+_MOBILE_MARKERS = (
+    "react native",
+    "mobile developer",
+    "mobile engineer",
+    "desarrollador movil",
+    "android developer",
+    "ios developer",
+)
+_BACKEND_MARKERS = (
+    "backend",
+    "back end",
+    "backend developer",
+    "desarrollador backend",
+    "node developer",
+    "api developer",
+    "devops",
+    "data engineer",
+    "database administrator",
+)
+
+_ROLE_SCORES = {
+    "frontend": 15,
+    "mobile": 12,
+    "fullstack": 10,
+    "unknown": 8,
+    "backend": 0,
+}
+
+# Quilmes and the AMBA commute are explicitly acceptable, so they outrank a
+# posting in another province that would mean relocating.
+_AMBA_MARKERS = (
+    "quilmes",
+    "avellaneda",
+    "lanus",
+    "lomas de zamora",
+    "berazategui",
+    "ezpeleta",
+    "wilde",
+    "don bosco",
+    "bernal",
+    "temperley",
+    "turdera",
+    "banfield",
+    "adrogue",
+    "claypole",
+    "ezeiza",
+    "canning",
     "caba",
+    "c a b a",
+    "capital federal",
+    "ciudad autonoma",
+    "buenos aires",
     "amba",
     "gba",
+    "zona sur",
+    "zona norte",
+    "zona oeste",
+    "vicente lopez",
+    "san isidro",
+    "olivos",
+    "martinez",
+    "tigre",
+    "pilar",
+    "escobar",
+    "moron",
+    "san justo",
+    "la matanza",
+    "ramos mejia",
+    "hurlingham",
+    "ituzaingo",
+    "tres de febrero",
+    "caseros",
+    "san martin",
+    "lomas del mirador",
+)
+
+_AR_LOCATION_MARKERS = (
+    "argentina",
     "rosario",
     "cordoba",
     "mendoza",
@@ -97,6 +240,8 @@ _AR_LOCATION_MARKERS = (
     "salta",
     "mar del plata",
     "santa fe",
+    "neuquen",
+    "bahia blanca",
     "ar",
 )
 
@@ -121,7 +266,40 @@ _FOREIGN_LOCATION_MARKERS = (
     "india",
 )
 
-_SENIORITY_SCORES = {"junior": 25, "mid": 18, "unknown": 12, "senior": 0}
+_SENIORITY_SCORES = {"junior": 25, "unknown": 12, "mid": 4, "senior": 0}
+
+_ENGLISH_LEVELS = (
+    ("advanced", ("ingles avanzado", "advanced english", "fluent english", "ingles fluido", "english fluent", "b2", "c1", "c2")),
+    ("intermediate", ("ingles intermedio", "intermediate english", "b1")),
+    ("basic", ("ingles basico", "basic english", "a2")),
+)
+
+_ENGLISH_REQUIRED_MARKERS = (
+    "ingles excluyente",
+    "english required",
+    "requiere ingles",
+    "requerimos ingles",
+    "english is required",
+)
+
+_UNPAID_MARKERS = (
+    "pasantia no remunerada",
+    "no remunerada",
+    "sin remuneracion",
+    "unpaid",
+    "ad honorem",
+    "sin paga",
+)
+
+_DEGREE_MARKERS = (
+    "titulo universitario",
+    "estudiante universitario",
+    "university degree",
+    "bachelor",
+    "licenciatura",
+    "graduado universitario",
+    "ingenieria en sistemas",
+)
 
 _YEARS_RANGE_RE = re.compile(r"(\d{1,2})\s*(?:a|to|-)\s*(\d{1,2})\s*(?:anos|años|years|year)\b")
 _YEARS_SINGLE_RE = re.compile(r"(\d{1,2})\s*\+?\s*(?:anos|años|years|year)\b")
@@ -140,6 +318,15 @@ class ScoreBreakdown:
     matched_skills: tuple[str, ...]
     seniority_level: str
     required_years: int | None
+    role_focus: str = "unknown"
+    english_level: str | None = None
+    english_required: bool = False
+    unpaid: bool = False
+    degree_required: bool = False
+
+    @property
+    def role(self) -> int:
+        return self.parts["role"]
 
     @property
     def stack(self) -> int:
@@ -169,6 +356,11 @@ class ScoreBreakdown:
             "matched_skills": list(self.matched_skills),
             "seniority_level": self.seniority_level,
             "required_years": self.required_years,
+            "role_focus": self.role_focus,
+            "english_level": self.english_level,
+            "english_required": self.english_required,
+            "unpaid": self.unpaid,
+            "degree_required": self.degree_required,
         }
 
 
@@ -190,11 +382,16 @@ def _deaccent(text: str) -> str:
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
-def _match_skills(text: str) -> tuple[tuple[str, ...], int]:
-    """Return the matched skill names and the capped stack score."""
+def _mask_compounds(text: str) -> str:
     masked = text
     for compound, base in _JS_COMPOUNDS.items():
         masked = masked.replace(compound, base)
+    return masked
+
+
+def _match_skills(text: str) -> tuple[tuple[str, ...], int]:
+    """Return the matched skill names and the capped stack score."""
+    masked = _mask_compounds(text)
 
     matched: list[str] = []
     points = 0
@@ -205,13 +402,18 @@ def _match_skills(text: str) -> tuple[tuple[str, ...], int]:
     return tuple(matched), min(points, MAX_SCORES["stack"])
 
 
-def _seniority_of(text: str) -> str | None:
-    if _matches_any(text, _JUNIOR_MARKERS):
+def _seniority_of(text: str, *, from_title: bool) -> str | None:
+    masked = text
+    for compound, base in _SENIORITY_COMPOUNDS.items():
+        masked = masked.replace(compound, base)
+    if _matches_any(masked, _JUNIOR_MARKERS):
         return "junior"
-    if _matches_any(text, _MID_MARKERS):
-        return "mid"
-    if _matches_any(text, _SENIOR_MARKERS):
+    senior_markers = _SENIOR_MARKERS if from_title else _SENIOR_PHRASES
+    if _matches_any(masked, senior_markers):
         return "senior"
+    mid_markers = _MID_MARKERS if from_title else _MID_PHRASES
+    if _matches_any(masked, mid_markers):
+        return "mid"
     return None
 
 
@@ -221,7 +423,45 @@ def _seniority(title: str, description: str) -> str:
     A junior title stays junior even when the description mentions working with
     senior engineers, which is exactly what made keyword counting unusable.
     """
-    return _seniority_of(title) or _seniority_of(description) or "unknown"
+    return (
+        _seniority_of(title, from_title=True)
+        or _seniority_of(description, from_title=False)
+        or "unknown"
+    )
+
+
+def _role_from_title(title: str) -> str | None:
+    if _matches_any(title, _FULLSTACK_MARKERS):
+        return "fullstack"
+    if _matches_any(title, _FRONTEND_MARKERS):
+        return "frontend"
+    if _matches_any(title, _MOBILE_MARKERS):
+        return "mobile"
+    if _matches_any(title, _BACKEND_MARKERS):
+        return "backend"
+    return None
+
+
+def _role_focus(title: str, description: str) -> str:
+    """Which half of the stack the job actually lives in.
+
+    The title decides when it says anything at all. Only a silent title falls
+    back to the body, and a body naming both sides is a fullstack role: the
+    profile explicitly allows those when the backend stays bounded.
+    """
+    from_title = _role_from_title(title)
+    if from_title:
+        return from_title
+
+    frontend = _matches_any(description, ("frontend", "front end", "react"))
+    backend = _matches_any(description, ("backend", "back end", "api rest", "microservicios"))
+    if frontend and backend:
+        return "fullstack"
+    if frontend:
+        return "frontend"
+    if backend:
+        return "backend"
+    return "unknown"
 
 
 def _required_years(description: str) -> int | None:
@@ -240,26 +480,43 @@ def _required_years(description: str) -> int | None:
 
 
 def _experience_score(required_years: int | None) -> int:
+    """Up to two years is the profile's target range; three is already a stretch."""
     if required_years is None or required_years <= 1:
         return MAX_SCORES["experience"]
+    if required_years <= 2:
+        return 8
     if required_years <= 3:
-        return 12
-    if required_years <= 5:
-        return 6
+        return 2
     return 0
 
 
 def _location_score(location: str, is_remote: bool) -> int:
+    normalized = normalize_text(location)
+    foreign = _matches_any(normalized, _FOREIGN_LOCATION_MARKERS)
+    if foreign:
+        # A remote offer abroad is only viable when the employer can hire in
+        # Argentina, which the row cannot prove, so it ranks below local remote.
+        return 5 if is_remote else 0
     if is_remote:
         return MAX_SCORES["location"]
-    normalized = normalize_text(location)
     if not normalized:
-        return 5
-    if _matches_any(normalized, _FOREIGN_LOCATION_MARKERS):
-        return 0
+        return 4
+    if _matches_any(normalized, _AMBA_MARKERS):
+        return 9
     if _matches_any(normalized, _AR_LOCATION_MARKERS):
-        return 8
-    return 0
+        return 7
+    return 3
+
+
+def _english(description: str) -> tuple[str | None, bool]:
+    text = _deaccent(description)
+    level = None
+    for name, markers in _ENGLISH_LEVELS:
+        if _matches_any(text, markers):
+            level = name
+            break
+    required = level == "advanced" or _matches_any(text, _ENGLISH_REQUIRED_MARKERS)
+    return level, required
 
 
 def _recency_score(posted_at: date | None, today: date) -> int:
@@ -285,9 +542,13 @@ def score_job(job: NormalizedJob, *, today: date | None = None) -> ScoreBreakdow
 
     matched_skills, stack = _match_skills(f"{title} {description}")
     seniority_level = _seniority(title, description)
+    role_focus = _role_focus(title, description)
     required_years = _required_years(job.description)
+    english_level, english_required = _english(job.description)
+    flags = _deaccent(job.description)
 
     parts = {
+        "role": _ROLE_SCORES[role_focus],
         "stack": stack,
         "seniority": _SENIORITY_SCORES[seniority_level],
         "experience": _experience_score(required_years),
@@ -300,6 +561,11 @@ def score_job(job: NormalizedJob, *, today: date | None = None) -> ScoreBreakdow
         matched_skills=matched_skills,
         seniority_level=seniority_level,
         required_years=required_years,
+        role_focus=role_focus,
+        english_level=english_level,
+        english_required=english_required,
+        unpaid=_matches_any(flags, _UNPAID_MARKERS),
+        degree_required=_matches_any(flags, _DEGREE_MARKERS),
     )
 
 

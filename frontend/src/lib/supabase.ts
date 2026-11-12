@@ -31,6 +31,7 @@ export type OfferSource = {
 };
 
 export type ScoreParts = {
+  role: number;
   stack: number;
   seniority: number;
   experience: number;
@@ -48,6 +49,11 @@ export type ScoreBreakdown = {
   matched_skills?: string[] | null;
   required_years?: number | null;
   seniority_level?: string | null;
+  role_focus?: string | null;
+  english_level?: string | null;
+  english_required?: boolean | null;
+  unpaid?: boolean | null;
+  degree_required?: boolean | null;
 };
 
 export type Offer = {

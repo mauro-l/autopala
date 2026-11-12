@@ -72,16 +72,25 @@ INDEED_HOURS = (9, 12, 15)
 # The curated ATS list is cheap and stable, so a single daily pass is enough.
 ATS_HOUR = 9
 
+# Frontend-first, in Spanish and English, because the target roles are frontend
+# junior/trainee postings. A backend-only term like "node.js developer" pulls
+# exactly the roles the profile rules out, so it is deliberately absent.
+#
+# The list length must not divide 24: the slot index is day*24 + hour, so a
+# length that divides 24 would hand the same term to the same hour every day and
+# starve the rest of the list.
 LINKEDIN_TERMS = (
-    "react developer",
-    "frontend developer react",
-    "javascript developer",
-    "typescript developer",
-    "node.js developer",
     "desarrollador frontend",
-    "react junior",
+    "frontend developer react",
+    "react developer junior",
+    "desarrollador react junior",
+    "frontend junior",
+    "desarrollador javascript",
+    "next.js developer",
+    "pasantia desarrollo web",
+    "react native junior",
 )
-INDEED_TERMS = ("react developer", "desarrollador frontend", "node developer")
+INDEED_TERMS = ("desarrollador frontend", "frontend junior", "react developer")
 
 # Both were verified live against the public board APIs. Never add a slug that
 # has not returned 200, because a wrong slug is a silent empty run.

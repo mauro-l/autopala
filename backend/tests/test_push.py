@@ -210,7 +210,7 @@ class TestDeliverPushNotifications:
     def test_only_offers_at_or_above_the_threshold_are_delivered(self) -> None:
         sender = FakeSender()
         report = deliver_push_notifications(
-            [make_scored(85), make_scored(84, job_id="job-2")],
+            [make_scored(80), make_scored(79, job_id="job-2")],
             notifier=make_notifier(sender),
             writer=FakeWriter(),
             now=NOW,

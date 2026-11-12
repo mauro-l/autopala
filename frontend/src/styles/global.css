@@ -754,6 +754,28 @@ select {
   margin-left: auto;
 }
 
+/* ---------- pin ---------- */
+
+.pin-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.pin-settings input {
+  width: 84px;
+  padding: 6px 8px;
+  text-align: center;
+  letter-spacing: 0.12em;
+}
+
+.pin-error {
+  flex-basis: 100%;
+  color: var(--warn);
+  font-size: 0.75rem;
+}
+
 @media (max-width: 520px) {
   :root {
     --pad: 12px;

@@ -10,6 +10,7 @@ import type { Offer } from "../lib/supabase";
 import EmptyState from "./EmptyState";
 import FilterBar from "./FilterBar";
 import OfferCard from "./OfferCard";
+import PinSettings from "./PinSettings";
 import PushToggle from "./PushToggle";
 import SkeletonList from "./SkeletonList";
 
@@ -64,6 +65,7 @@ export default function Dashboard({
         </div>
         <div className="user">
           {email ? <span className="user-email">{email}</span> : null}
+          {userId ? <PinSettings userId={userId} /> : null}
           <button type="button" className="ghost" onClick={onSignOut}>
             Salir
           </button>

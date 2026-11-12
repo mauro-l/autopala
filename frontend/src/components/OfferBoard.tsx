@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { clearPin, hasPin } from "../lib/pin";
 import { isConfigured, OFFER_SELECT, supabase, type Offer } from "../lib/supabase";
 import ConfigMissing from "./ConfigMissing";
 import Dashboard, { type ClaimState } from "./Dashboard";
 import LoginView from "./LoginView";
+import PinLock from "./PinLock";
 
 /**
  * Container: owns authentication, the ownership claim and the single read of
@@ -15,8 +17,14 @@ export default function OfferBoard() {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // In-memory only: closing the app re-locks it, which is the point of the PIN.
+  const [unlocked, setUnlocked] = useState(false);
 
   const userId = session?.user.id ?? null;
+
+  useEffect(() => {
+    setUnlocked(false);
+  }, [userId]);
 
   useEffect(() => {
     const client = supabase;
@@ -97,22 +105,17 @@ export default function OfferBoard() {
     void loadOffers();
   }, [claim, loadOffers]);
 
-  const signIn = useCallback(async (email: string): Promise<string | null> => {
-    const client = supabase;
-    if (!client) return "Falta configuración.";
-    const { error } = await client.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/`,
-        // Only an account that already exists may request a link. Without this
-        // anyone could type an address, get a session and race for ownership.
-        shouldCreateUser: false,
-      },
-    });
-    if (!error) return null;
-    console.error("signInWithOtp failed", error);
-    return "No se pudo enviar el enlace. Revisá el correo e intentá de nuevo.";
-  }, []);
+  const signIn = useCallback(
+    async (email: string, password: string): Promise<string | null> => {
+      const client = supabase;
+      if (!client) return "Falta configuración.";
+      const { error } = await client.auth.signInWithPassword({ email, password });
+      if (!error) return null;
+      console.error("signInWithPassword failed", error);
+      return "Correo o contraseña incorrectos.";
+    },
+    [],
+  );
 
   const signOut = useCallback(() => {
     const client = supabase;
@@ -140,6 +143,21 @@ export default function OfferBoard() {
 
   if (session === null) {
     return <LoginView onSignIn={signIn} />;
+  }
+
+  // A PIN is a local screen lock over the stored session, so it sits between
+  // authentication and the dashboard and never replaces the password.
+  if (hasPin(session.user.id) && !unlocked) {
+    return (
+      <PinLock
+        userId={session.user.id}
+        onUnlock={() => setUnlocked(true)}
+        onForgot={() => {
+          clearPin(session.user.id);
+          signOut();
+        }}
+      />
+    );
   }
 
   return (

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { clearPin, hasPin } from "../lib/pin";
+import { clearPin, clearUnlocked, hasPin, isUnlocked, markUnlocked } from "../lib/pin";
 import { isConfigured, OFFER_SELECT, supabase, type Offer } from "../lib/supabase";
 import ConfigMissing from "./ConfigMissing";
 import Dashboard, { type ClaimState } from "./Dashboard";
@@ -17,13 +17,24 @@ export default function OfferBoard() {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // In-memory only: closing the app re-locks it, which is the point of the PIN.
-  const [unlocked, setUnlocked] = useState(false);
+  // Bumped by the lock timer and by an unlock, so the gate re-evaluates.
+  const [, setTick] = useState(0);
 
   const userId = session?.user.id ?? null;
 
+  // Re-lock while the app stays open: the stamp expires on its own.
   useEffect(() => {
-    setUnlocked(false);
+    if (!userId) return;
+    const check = () => setTick((value) => value + 1);
+    const timer = window.setInterval(check, 30_000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [userId]);
 
   useEffect(() => {
@@ -120,12 +131,14 @@ export default function OfferBoard() {
   const signOut = useCallback(() => {
     const client = supabase;
     if (!client) return;
+    // Signing out drops the grace stamp: the next login must ask for the PIN.
+    if (userId) clearUnlocked(userId);
     void client.auth.signOut().finally(() => {
       setOffers([]);
       setClaim("idle");
       setLoadError(null);
     });
-  }, []);
+  }, [userId]);
 
   if (!isConfigured || !supabase) {
     return <ConfigMissing />;
@@ -146,14 +159,19 @@ export default function OfferBoard() {
   }
 
   // A PIN is a local screen lock over the stored session, so it sits between
-  // authentication and the dashboard and never replaces the password.
-  if (hasPin(session.user.id) && !unlocked) {
+  // authentication and the dashboard and never replaces the password. The grace
+  // stamp lives in localStorage, so a short absence does not ask again.
+  if (hasPin(session.user.id) && !isUnlocked(session.user.id)) {
     return (
       <PinLock
         userId={session.user.id}
-        onUnlock={() => setUnlocked(true)}
+        onUnlock={() => {
+          markUnlocked(session.user.id);
+          setTick((value) => value + 1);
+        }}
         onForgot={() => {
           clearPin(session.user.id);
+          clearUnlocked(session.user.id);
           signOut();
         }}
       />

@@ -31,6 +31,29 @@ function urlBase64ToBytes(value: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
+const PERMISSION_TIMEOUT_MS = 10_000;
+
+/**
+ * Some browsers never settle the permission promise (dismissed prompt, odd
+ * embedding). A hung promise would leave the button spinning forever, so give
+ * up on it and surface a real state instead.
+ */
+function withTimeout<T>(promise: Promise<T>, fallback: T, ms = PERMISSION_TIMEOUT_MS): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
 function bytesToBase64Url(buffer: ArrayBuffer | null): string {
   if (!buffer) return "";
   let binary = "";
@@ -59,7 +82,20 @@ export async function pushStatus(): Promise<PushStatus> {
   if (!VAPID_PUBLIC_KEY) return "unconfigured";
   if (Notification.permission === "denied") return "denied";
   const subscription = await activeSubscription();
-  return subscription ? "on" : "off";
+  if (!subscription) return "off";
+
+  // A browser subscription the database never stored cannot deliver anything,
+  // so the panel must not claim it is on.
+  const client = supabase;
+  if (client) {
+    const { data, error } = await client
+      .from("push_subscriptions")
+      .select("endpoint")
+      .eq("endpoint", subscription.endpoint)
+      .maybeSingle();
+    if (!error && !data) return "off";
+  }
+  return "on";
 }
 
 /** Returns an error message for the UI, or `null` on success. */
@@ -72,41 +108,66 @@ export async function enablePush(userId: string): Promise<string | null> {
   }
   const client = supabase;
   if (!client) return "Falta configuración de Supabase.";
-
-  // Permission may only be requested from a user gesture; this call is one.
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") {
-    return "El navegador no dio permiso para mostrar notificaciones.";
+  if (Notification.permission === "denied") {
+    return "El navegador bloqueó los avisos para este sitio. Habilitalos en la configuración del navegador.";
   }
 
-  const registration =
-    (await registerServiceWorker()) ?? (await navigator.serviceWorker.ready);
+  try {
+    // Permission may only be requested from a user gesture; this call is one.
+    const permission = await withTimeout<NotificationPermission | "timeout">(
+      Notification.requestPermission(),
+      "timeout",
+    );
+    if (permission === "timeout") {
+      return "El navegador no respondió al pedido de permiso. Reintentá desde la app instalada.";
+    }
+    if (permission !== "granted") {
+      return "No diste permiso para mostrar notificaciones.";
+    }
 
-  const existing = await registration.pushManager.getSubscription();
-  const subscription =
-    existing ??
-    (await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToBytes(VAPID_PUBLIC_KEY),
-    }));
+    const registration = await registerServiceWorker();
+    if (!registration) {
+      return "No se pudo registrar el service worker. Recargá la página e intentá de nuevo.";
+    }
 
-  const { error } = await client.from("push_subscriptions").upsert(
-    {
-      user_id: userId,
-      endpoint: subscription.endpoint,
-      p256dh: bytesToBase64Url(subscription.getKey("p256dh")),
-      auth: bytesToBase64Url(subscription.getKey("auth")),
-      user_agent: navigator.userAgent.slice(0, 300),
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "endpoint" },
-  );
+    const existing = await registration.pushManager.getSubscription();
+    const subscription =
+      existing ??
+      (await withTimeout<PushSubscription | null>(
+        registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToBytes(VAPID_PUBLIC_KEY),
+        }),
+        null,
+      ));
+    if (!subscription) {
+      return "El navegador no completó la suscripción push.";
+    }
 
-  if (error) {
-    console.error("push subscription save failed", error);
-    return "No se pudo guardar la suscripción en la base.";
+    const { error } = await client.from("push_subscriptions").upsert(
+      {
+        user_id: userId,
+        endpoint: subscription.endpoint,
+        p256dh: bytesToBase64Url(subscription.getKey("p256dh")),
+        auth: bytesToBase64Url(subscription.getKey("auth")),
+        user_agent: navigator.userAgent.slice(0, 300),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "endpoint" },
+    );
+
+    if (error) {
+      console.error("push subscription save failed", error);
+      // Do not leave a subscription the server will never use.
+      await subscription.unsubscribe();
+      return `No se pudo guardar la suscripción en la base (${error.code ?? "sin código"}).`;
+    }
+    return null;
+  } catch (error) {
+    console.error("push subscribe failed", error);
+    const name = error instanceof Error ? error.name : "Error";
+    return `No se pudo suscribir este dispositivo (${name}).`;
   }
-  return null;
 }
 
 /** Returns an error message for the UI, or `null` on success. */
@@ -114,21 +175,26 @@ export async function disablePush(): Promise<string | null> {
   if (!pushSupported()) return null;
   const client = supabase;
 
-  const subscription = await activeSubscription();
-  if (!subscription) return null;
+  try {
+    const subscription = await activeSubscription();
+    if (!subscription) return null;
 
-  const endpoint = subscription.endpoint;
-  await subscription.unsubscribe();
+    const endpoint = subscription.endpoint;
+    await subscription.unsubscribe();
 
-  if (client) {
-    const { error } = await client
-      .from("push_subscriptions")
-      .delete()
-      .eq("endpoint", endpoint);
-    if (error) {
-      console.error("push subscription delete failed", error);
-      return "Se desactivó en este teléfono, pero no se pudo borrar en la base.";
+    if (client) {
+      const { error } = await client
+        .from("push_subscriptions")
+        .delete()
+        .eq("endpoint", endpoint);
+      if (error) {
+        console.error("push subscription delete failed", error);
+        return "Se desactivó en este teléfono, pero no se pudo borrar en la base.";
+      }
     }
+    return null;
+  } catch (error) {
+    console.error("push unsubscribe failed", error);
+    return "No se pudo desactivar en este dispositivo.";
   }
-  return null;
 }

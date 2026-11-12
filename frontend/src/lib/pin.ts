@@ -104,3 +104,32 @@ export function clearPin(userId: string): void {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(storageKey(userId));
 }
+
+/**
+ * Grace window. Reopening the app within it does not ask again, but leaving it
+ * alone for longer treats the device as unattended and re-locks the screen.
+ */
+export const UNLOCK_TTL_MS = 30 * 60 * 1000;
+
+function unlockKey(userId: string): string {
+  return `pala.pin.open.${userId}`;
+}
+
+export function markUnlocked(userId: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(unlockKey(userId), String(Date.now()));
+}
+
+export function isUnlocked(userId: string): boolean {
+  if (typeof window === "undefined") return false;
+  const raw = window.localStorage.getItem(unlockKey(userId));
+  if (!raw) return false;
+  const stamp = Number(raw);
+  if (!Number.isFinite(stamp)) return false;
+  return Date.now() - stamp < UNLOCK_TTL_MS;
+}
+
+export function clearUnlocked(userId: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(unlockKey(userId));
+}

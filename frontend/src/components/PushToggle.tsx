@@ -15,8 +15,8 @@ const NOTE: Record<PushStatus, string> = {
   unsupported: "Este navegador no puede mostrar avisos push.",
   unconfigured: "Falta la clave pública de avisos en la configuración.",
   denied: "El permiso de avisos está bloqueado en el navegador.",
-  on: "Los avisos llegan a este teléfono.",
-  off: "Activá los avisos para enterarte de las ofertas de 85 o más.",
+  on: "Los avisos llegan a este teléfono, solo para ofertas de 80 o más.",
+  off: "Activá los avisos para enterarte cuando aparezca una oferta de 80 o más.",
 };
 
 const ACTION: Partial<Record<PushStatus, string>> = {
@@ -44,16 +44,22 @@ export default function PushToggle({ userId }: Props) {
     setBusy(true);
     setMessage(null);
 
-    if (status === "on") {
-      const error = await disablePush();
-      setStatus(error ? "on" : "off");
-      setMessage(error);
-    } else {
-      const error = await enablePush(userId);
-      setStatus(await pushStatus());
-      setMessage(error);
+    try {
+      if (status === "on") {
+        const error = await disablePush();
+        setStatus(error ? "on" : "off");
+        setMessage(error);
+      } else {
+        const error = await enablePush(userId);
+        setStatus(await pushStatus());
+        setMessage(error);
+      }
+    } catch (failure) {
+      console.error("push toggle failed", failure);
+      setMessage("No se pudo cambiar el estado de los avisos.");
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   if (status === null) return null;

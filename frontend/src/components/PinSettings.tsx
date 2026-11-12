@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { clearPin, hasPin, isValidPin, pinSupported, setPin as savePin } from "../lib/pin";
+import {
+  clearPin,
+  clearUnlocked,
+  hasPin,
+  isValidPin,
+  markUnlocked,
+  pinSupported,
+  setPin as savePin,
+} from "../lib/pin";
 
 type Props = {
   userId: string;
@@ -39,6 +47,8 @@ export default function PinSettings({ userId }: Props) {
     setBusy(true);
     try {
       await savePin(userId, pin);
+      // Setting a PIN must not lock the screen the user is standing in front of.
+      markUnlocked(userId);
       setInstalled(true);
       setOpen(false);
       setPin("");
@@ -52,6 +62,7 @@ export default function PinSettings({ userId }: Props) {
 
   const remove = () => {
     clearPin(userId);
+    clearUnlocked(userId);
     setInstalled(false);
     setOpen(false);
   };

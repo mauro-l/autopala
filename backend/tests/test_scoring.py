@@ -347,6 +347,17 @@ class TestRecency:
     def test_unknown_date_is_neutral(self):
         assert score_job(make_job(posted_at=None), today=TODAY).recency == 4
 
+    @pytest.mark.parametrize(
+        ("days_ago", "expected"),
+        [(0, 1.0), (30, 1.0), (31, 0.7), (60, 0.7), (61, 0.4), (365, 0.4)],
+    )
+    def test_the_whole_score_is_scaled_past_the_first_month(self, days_ago, expected):
+        job = make_job(posted_at=TODAY - timedelta(days=days_ago))
+        assert score_job(job, today=TODAY).recency_multiplier == expected
+
+    def test_an_unknown_date_is_not_scaled(self):
+        assert score_job(make_job(posted_at=None), today=TODAY).recency_multiplier == 1.0
+
 
 class TestFlags:
     def test_advanced_english_is_reported_as_required(self):
@@ -417,6 +428,38 @@ class TestTotal:
         assert result.parts["stack"] == 11
         assert result.total == 81
         assert should_notify(result.total) is True
+
+    def test_the_total_is_the_raw_total_times_the_multiplier(self):
+        job = make_job(
+            title="Senior Frontend React",
+            description="React. 5 años de experiencia.",
+            posted_at=TODAY - timedelta(days=45),
+        )
+        result = score_job(job, today=TODAY)
+        assert result.raw_total == sum(result.parts.values())
+        assert result.recency_multiplier == 0.7
+        assert result.total == round(result.raw_total * 0.7)
+
+    def test_a_stale_dream_match_stops_notifying(self):
+        fields = {
+            "title": "Junior Frontend Developer",
+            "location": "Buenos Aires, Argentina",
+            "is_remote": True,
+            "description": "React, TypeScript, JavaScript, Node.js, Express, MongoDB. 1 year.",
+        }
+        fresh = score_job(make_job(posted_at=TODAY, **fields), today=TODAY)
+        stale = score_job(
+            make_job(posted_at=TODAY - timedelta(days=180), **fields), today=TODAY
+        )
+        assert should_notify(fresh.total) is True
+        assert should_notify(stale.total) is False
+
+    def test_the_payload_explains_the_age_scaling(self):
+        payload = score_job(
+            make_job(posted_at=TODAY - timedelta(days=90)), today=TODAY
+        ).to_payload()
+        assert payload["recency_multiplier"] == 0.4
+        assert payload["total"] == round(payload["raw_total"] * 0.4)
 
     def test_a_poor_match_scores_low_and_stays_silent(self):
         job = make_job(
@@ -505,4 +548,5 @@ class TestRealRows:
         for row in rows:
             result = score_job(from_jobdrop_row(row), today=TODAY)
             assert 0 <= result.total <= 100
-            assert result.total == sum(result.parts.values())
+            assert result.raw_total == sum(result.parts.values())
+            assert result.total == round(result.raw_total * result.recency_multiplier)

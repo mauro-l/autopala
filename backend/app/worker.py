@@ -60,7 +60,7 @@ from app.push import (
     WebPushNotifier,
     deliver_push_notifications,
 )
-from app.scoring import ScoreBreakdown, score_job, should_notify
+from app.scoring import ScoreBreakdown, is_stale, score_job, should_notify
 
 LOG = logging.getLogger(__name__)
 
@@ -753,6 +753,7 @@ class RunResult:
     enrichment: EnrichmentReport = field(default_factory=EnrichmentReport)
     errors: list[str] = field(default_factory=list)
     failed: int = 0
+    stale: int = 0
 
 
 def run_collection(
@@ -773,6 +774,10 @@ def run_collection(
     count is the honest number.
     """
     result = RunResult()
+    # One reference date for the whole run: the age cap, the title-only
+    # enrichment ranking and the final score must agree about "today", even
+    # when the batch straddles midnight.
+    reference = today or date.today()
     collected: list[NormalizedJob] = []
     seen: set[str] = set()
 
@@ -792,6 +797,12 @@ def run_collection(
         else:
             dropped = 0
             for job in adapted:
+                # A posting past the age cap is not a bad match, it is a closed
+                # one. It never reaches enrichment or the database, so a board
+                # fed by a stale ATS listing cannot resurrect it.
+                if is_stale(job, reference):
+                    result.stale += 1
+                    continue
                 if not job.title.strip():
                     dropped += 1
                     continue
@@ -828,13 +839,13 @@ def run_collection(
         collected,
         fetcher=fetcher,
         max_fetches=max_fetches,
-        today=today,
+        today=reference,
     )
     result.enrichment = enrichment
 
     for job in dedupe(enriched):
         try:
-            breakdown = score_job(job, today=today)
+            breakdown = score_job(job, today=reference)
             payload = job_payload(job)
             job_id = writer.upsert_job(payload)
             writer.save_score(job_id, breakdown.total, breakdown.to_payload())
@@ -960,10 +971,11 @@ def run_forever(
                     max_fetches=max_fetches,
                 )
                 LOG.info(
-                    "run finished: %d plans, %d offers, %d notify, %d failed",
+                    "run finished: %d plans, %d offers, %d notify, %d stale, %d failed",
                     len(result.runs),
                     len(result.jobs),
                     len(result.notify),
+                    result.stale,
                     result.failed,
                 )
                 _send_notifications(result, notifier=notifier, writer=writer)
@@ -1017,7 +1029,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         fetcher=fetcher,
         max_fetches=args.max_fetches,
     )
-    LOG.info("%d offers, %d to notify", len(result.jobs), len(result.notify))
+    LOG.info(
+        "%d offers, %d to notify, %d stale dropped",
+        len(result.jobs),
+        len(result.notify),
+        result.stale,
+    )
     _send_notifications(result, notifier=notifier, writer=writer)
     return 0
 

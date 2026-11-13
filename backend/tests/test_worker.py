@@ -363,7 +363,42 @@ class TestRunCollection:
         writer = FakeWriter()
         run_collection([plan("indeed")], scrape=FakeScraper({"indeed": [INDEED_ROW]}), writer=writer, today=TODAY)
         _, total, breakdown = writer.scores[0]
-        assert sum(breakdown["parts"].values()) == breakdown["total"] == total
+        assert sum(breakdown["parts"].values()) == breakdown["raw_total"]
+        assert breakdown["total"] == round(breakdown["raw_total"] * breakdown["recency_multiplier"])
+        assert breakdown["total"] == total
+
+    def test_a_posting_past_the_age_cap_is_never_stored(self) -> None:
+        old = dict(
+            INDEED_ROW,
+            id="old-1",
+            date_posted=(TODAY - timedelta(days=61)).isoformat(),
+        )
+        writer = FakeWriter()
+        result = run_collection(
+            [plan("indeed")],
+            scrape=FakeScraper({"indeed": [old]}),
+            writer=writer,
+            today=TODAY,
+        )
+        assert writer.payloads == []
+        assert result.jobs == []
+        assert result.stale == 1
+
+    def test_a_posting_on_the_age_cap_is_still_stored(self) -> None:
+        edge = dict(
+            INDEED_ROW,
+            id="edge-1",
+            date_posted=(TODAY - timedelta(days=60)).isoformat(),
+        )
+        writer = FakeWriter()
+        result = run_collection(
+            [plan("indeed")],
+            scrape=FakeScraper({"indeed": [edge]}),
+            writer=writer,
+            today=TODAY,
+        )
+        assert len(writer.payloads) == 1
+        assert result.stale == 0
 
     def test_only_offers_at_or_above_the_notify_threshold_are_returned(self) -> None:
         weak = dict(INDEED_ROW, description="", title="Cocinero", id="weak-1")

@@ -62,7 +62,7 @@ The target profile lives in `writing-block.md`; the scorer and the search terms 
 
 ## Scoring (implemented, `backend/app/scoring.py`)
 
-Six weighted dimensions totalling 0–100. `score_job()` is pure and deterministic: the same row always scores the same, and a re-tune needs no new scrape because the raw payload is stored beside the row. An LLM pass may later add nuance but can never be required.
+Six weighted dimensions totalling 0–100. `score_job()` is pure and deterministic: the same row always scores the same, and a re-tune needs no new scrape because the raw payload is stored beside the row. An LLM pass may later add nuance but can never be required. Past 30 days of age the whole total is also scaled (×0.7 up to 60 days, ×0.4 beyond), so freshness gates the ranking instead of merely contributing ten points.
 
 | dimension | budget | rule |
 | --- | --- | --- |
@@ -71,9 +71,9 @@ Six weighted dimensions totalling 0–100. `score_job()` is pure and determinist
 | `seniority` | 25 | junior 25, unknown 12, mid 4, senior 0 |
 | `experience` | 10 | no mention or ≤1 year → 10, ≤2 → 8, ≤3 → 2, more → 0 |
 | `location` | 10 | remote 10, remote with a foreign marker 5, on-site AMBA 9, on-site elsewhere in Argentina 7, empty on-site 4, unknown 3, foreign on-site 0 |
-| `recency` | 10 | no date 4, ≤2 days 10, ≤7 → 8, ≤14 → 5, ≤30 → 2, older 0 |
+| `recency` | 10 | no date 4, ≤2 days 10, ≤7 → 8, ≤14 → 5, ≤30 → 2, older 0. Past 30 days the whole score is additionally scaled ×0.7, and ×0.4 past 60 |
 
-Thresholds: `NOTIFY_THRESHOLD = 80` and `SILENT_THRESHOLD = 70`. Only `total >= 80` notifies, and a notification is one message per qualifying offer — never one per stored row; everything else is stored silently. `ScoreBreakdown.to_payload()` is the exact shape written to the `score_breakdown` column, and `sum(parts) == total` always holds.
+Thresholds: `NOTIFY_THRESHOLD = 80` and `SILENT_THRESHOLD = 70`. Only `total >= 80` notifies, and a notification is one message per qualifying offer — never one per stored row; everything else is stored silently. `ScoreBreakdown.to_payload()` is the exact shape written to the `score_breakdown` column: `sum(parts) == raw_total` and `total == round(raw_total × recency_multiplier)`. They coincide only while the multiplier is `1.0`, which is the point.
 
 The breakdown also carries `role_focus`, `english_level`, `english_required`, `unpaid` and `degree_required`. They are **reported, never scored**: the profile forbids presupposing an English level, so a high-scoring posting is not downgraded for asking for one — the card shows an `inglés` chip instead, and `no remunerada` marks an unpaid internship.
 
@@ -83,6 +83,8 @@ Rules that are easy to break, all pinned by the 80 tests in `backend/tests/test_
 - **`SENIOR/SSR` is senior.** `semi senior` and `ssr` are masked to `mid` before the senior check, so `Semi Senior` and `SSR` stay mid while a title naming both `SENIOR` and `SSR` is senior.
 - **Body prose must not make a role senior.** The title uses bare senior words (`lead`, `staff`, `principal`); the body only accepts full phrases (`senior level`, `tech lead`, `engineering manager`). Measured false positive: "lead the activities of a team" and "Principal responsibilities include..." used to zero the seniority budget of a plain "React Developer" row.
 - **A mid-level role cannot reach the threshold.** `role 15 + stack 30 + mid 4 + experience 8 + location 10 + recency 10 = 77`. That ceiling is deliberate, from "no recomiendes puestos que sean en realidad Semi-Senior/Mid-Level".
+- **Age caps the score, it does not just subtract ten points.** Within the first month the recency points rank freshness; past 30 days the whole total is multiplied by 0.7 and past 60 by 0.4. Measured on the live corpus (2026-11-13): the 80-point AccelOne React role posted 226 days earlier fell to **32**, the 72-point Capgemini row to 29, while a fresh 67 stayed 67. No row older than 30 days can notify, because `0.7 × 100 < 80`. A missing date keeps the multiplier at `1.0`; guessing an age would be worse than admitting there is none.
+- **The collector refuses anything older than `MAX_POSTING_AGE_DAYS = 60`.** The cap lives on the same boundary as the hard multiplier: a stored row is softened by age, never silently zeroed by it. Dropped rows are counted in `RunResult.stale` and logged, and they never reach enrichment or the database.
 - **`all levels` / `todos los niveles` count as junior-accepting**, because an open-level posting admits a junior.
 - **The title outranks the description for seniority.** A junior title stays junior even when the body mentions working alongside senior engineers — that is exactly what made naive keyword counting unusable.
 - **JS compounds are collapsed before matching** (`node.js`, `vue.js`, `express.js`, `three.js`, `nest.js`, `react.js`, `tailwind.css` → their base token). `"node.js"` normalizes to `"node js"`, so left alone its trailing `js` would also count as a JavaScript mention.
@@ -119,7 +121,7 @@ Rules that are easy to break, all pinned in `backend/tests/test_enrich.py`:
 
 ## Collection worker (implemented, `backend/app/worker.py`, tested)
 
-Orchestrates `scrape → adapt → enrich → dedupe → score → upsert`, then writes one `scrape_runs` row per plan. 238 tests pass across the backend.
+Orchestrates `scrape → adapt` (dropping anything past `MAX_POSTING_AGE_DAYS`) `→ enrich → dedupe → score → upsert`, then writes one `scrape_runs` row per plan. 296 tests pass across the backend.
 
 **Pipeline order is load-bearing.** Enrichment runs on the **pre-fold** collected list, before the global dedupe, because `copy_descriptions` only fills a row whose description is empty. Folding LinkedIn into Indeed first leaves the surviving row with Indeed's text and the copy pass with nothing to do — so `enrichment.copied == 1` is impossible after a fold.
 
@@ -151,7 +153,7 @@ The user wants explicit control over when the worker runs, so **nothing autostar
 - A button inside the hosted PWA cannot do this: the PWA is static and remote, so it has no way to start a process on the PC. The only alternative would be an always-on bridge, which the user rejected.
 - Consequence to keep in mind: while the panel is closed there is no collection, and missed scheduled slots are not replayed. LinkedIn's `hours_old=168` recovers the last seven days; the 9:00 ATS pass and the Indeed slots are simply skipped.
 
-**First live collection (executed 2026-11-12 11:24 ART, `--once`):** the 11:00 slot ran LinkedIn only, 20 rows in 14 s, all 20 written (20 `job_sources`), 1 `scrape_runs` row with `status: ok`. Enrichment fetched 5 of the 8 allowed details with no throttling, so 5 of 20 rows carry a JD. Best score **73** (`parts`: stack 28, seniority 18, experience 12, location 5, recency 10) and **0 notifications** — exactly the ceiling `AGENTS.md` predicts for LinkedIn-only rows, since `stack` still has 12 of its 40 budget unclaimed. The `score_breakdown` shape is `{parts: {stack, seniority, experience, location, recency}, total, matched_skills, required_years, seniority_level}`; query `score_breakdown->'parts'->>'stack'`, not `score_breakdown->>'stack'`. The first 80+ candidate therefore has to come from an Indeed slot (9/12/15) or the 9:00 ATS boards.
+**First live collection (executed 2026-11-12 11:24 ART, `--once`):** the 11:00 slot ran LinkedIn only, 20 rows in 14 s, all 20 written (20 `job_sources`), 1 `scrape_runs` row with `status: ok`. Enrichment fetched 5 of the 8 allowed details with no throttling, so 5 of 20 rows carry a JD. Best score **73** (`parts`: stack 28, seniority 18, experience 12, location 5, recency 10) and **0 notifications** — exactly the ceiling `AGENTS.md` predicts for LinkedIn-only rows, since `stack` still has 12 of its 40 budget unclaimed. The `score_breakdown` shape is `{parts: {role, stack, seniority, experience, location, recency}, raw_total, total, recency_multiplier, matched_skills, required_years, seniority_level}`; query `score_breakdown->'parts'->>'stack'`, not `score_breakdown->>'stack'`. The first 80+ candidate therefore has to come from an Indeed slot (9/12/15) or the 9:00 ATS boards.
 
 `SupabaseWriter` sends the key on `apikey` always, and adds `Authorization: Bearer <key>` **only when the key starts with `eyJ`**. Legacy `service_role` keys are JWTs and work on either header; new `sb_secret_*` keys are not JWTs and PostgREST rejects them on `Authorization`, so they must travel on `apikey` alone. Both paths are pinned in `backend/tests/test_worker.py`.
 

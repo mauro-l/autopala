@@ -9,6 +9,12 @@ Weight budgets: role 15, stack 30, seniority 25, experience 10, location 10,
 recency 10. The shape follows the target profile: a frontend junior job in
 Argentina is a strong match even with no description, and a senior backend job
 can never reach the notification threshold no matter which keywords it names.
+
+Past a month the whole score is also scaled by age (``_recency_multiplier``).
+The budgets decide how well the row fits the profile; the multiplier decides
+whether the posting is still plausible at all. A five-month-old frontend job is
+not a weak match, it is a closed one, and no keyword combination should lift it
+back to the top of the board.
 """
 
 from __future__ import annotations
@@ -24,6 +30,20 @@ from app.normalize import normalize_text
 
 NOTIFY_THRESHOLD = 80
 SILENT_THRESHOLD = 70
+
+# Freshness gates the whole score past the first month. The ten recency points
+# still separate a same-day posting from a three-week-old one; these two limits
+# decide when age stops being a detail and starts being the answer.
+RECENCY_GRACE_DAYS = 30
+RECENCY_SOFT_LIMIT_DAYS = 60
+RECENCY_SOFT_MULTIPLIER = 0.7
+RECENCY_STALE_MULTIPLIER = 0.4
+
+# The collector refuses to store anything older than this, so the database does
+# not accumulate dead postings that the board can never rank honestly. The cap
+# sits on the hard boundary of the multiplier: a stored row is always softened,
+# never eliminated by it alone.
+MAX_POSTING_AGE_DAYS = 60
 
 MAX_SCORES: Mapping[str, int] = {
     "role": 15,
@@ -323,6 +343,7 @@ class ScoreBreakdown:
     english_required: bool = False
     unpaid: bool = False
     degree_required: bool = False
+    recency_multiplier: float = 1.0
 
     @property
     def role(self) -> int:
@@ -348,11 +369,18 @@ class ScoreBreakdown:
     def recency(self) -> int:
         return self.parts["recency"]
 
+    @property
+    def raw_total(self) -> int:
+        """The additive score before the age multiplier is applied."""
+        return sum(self.parts.values())
+
     def to_payload(self) -> dict[str, object]:
         """Shape stored in the ``score_breakdown`` jsonb column."""
         return {
             "parts": dict(self.parts),
+            "raw_total": self.raw_total,
             "total": self.total,
+            "recency_multiplier": self.recency_multiplier,
             "matched_skills": list(self.matched_skills),
             "seniority_level": self.seniority_level,
             "required_years": self.required_years,
@@ -534,6 +562,28 @@ def _recency_score(posted_at: date | None, today: date) -> int:
     return 0
 
 
+def _recency_multiplier(posted_at: date | None, today: date) -> float:
+    """Scale the whole score once the posting leaves the first month.
+
+    A missing date is not punished here: the row already loses six of the ten
+    recency points, and guessing an age would be worse than admitting there
+    is none.
+    """
+    if posted_at is None:
+        return 1.0
+    age = (today - posted_at).days
+    if age <= RECENCY_GRACE_DAYS:
+        return 1.0
+    if age <= RECENCY_SOFT_LIMIT_DAYS:
+        return RECENCY_SOFT_MULTIPLIER
+    return RECENCY_STALE_MULTIPLIER
+
+
+def is_stale(job: NormalizedJob, today: date) -> bool:
+    """True when a posting is too old for the collector to keep at all."""
+    return job.posted_at is not None and (today - job.posted_at).days > MAX_POSTING_AGE_DAYS
+
+
 def score_job(job: NormalizedJob, *, today: date | None = None) -> ScoreBreakdown:
     """Score one offer from 0 to 100, with every point attributed."""
     reference = today or date.today()
@@ -555,9 +605,11 @@ def score_job(job: NormalizedJob, *, today: date | None = None) -> ScoreBreakdow
         "location": _location_score(job.location, job.is_remote),
         "recency": _recency_score(job.posted_at, reference),
     }
+    multiplier = _recency_multiplier(job.posted_at, reference)
     return ScoreBreakdown(
         parts=parts,
-        total=sum(parts.values()),
+        total=round(sum(parts.values()) * multiplier),
+        recency_multiplier=multiplier,
         matched_skills=matched_skills,
         seniority_level=seniority_level,
         required_years=required_years,

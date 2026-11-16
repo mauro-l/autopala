@@ -729,6 +729,151 @@ select {
   }
 }
 
+/* ---------- day groups and triage actions ---------- */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.offer-groups {
+  display: grid;
+  gap: 18px;
+}
+
+.day-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.day-heading::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line-soft);
+}
+
+.day-count {
+  order: 2;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--sunken);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.offer-group .day-heading::after {
+  order: 1;
+}
+
+.offer-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.offer-head .offer-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.offer-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.action {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.action:hover:not(:disabled) {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.action.is-on {
+  color: var(--accent);
+  border-color: #2a3d63;
+  background: var(--accent-soft);
+}
+
+.action[aria-pressed="true"] svg {
+  fill: currentColor;
+}
+
+/* A seen offer stays readable and clickable; only its emphasis drops. */
+.offer.is-seen .offer-body {
+  opacity: 0.55;
+}
+
+.offer.is-seen:hover .offer-body,
+.offer.is-seen:focus-within .offer-body {
+  opacity: 1;
+}
+
+.offer.is-saved {
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--line));
+}
+
+.tag.is-saved {
+  color: var(--warn);
+  border-color: #46381a;
+  background: #1c1608;
+}
+
+.tag.is-seen {
+  color: #7f8ba3;
+}
+
+.chip-count {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--sunken);
+  border: 1px solid var(--line-soft);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chip.is-active .chip-count {
+  border-color: #2a3d63;
+}
+
+.error-box.small {
+  font-size: 0.84rem;
+  padding: 8px 12px;
+}
+
 /* ---------- responsive ---------- */
 
 /* ---------- settings sheet ---------- */

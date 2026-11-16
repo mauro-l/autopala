@@ -172,12 +172,13 @@ Wiring lives in the worker: `build_notifier()` reads `VAPID_PRIVATE_KEY`/`VAPID_
 
 ## Database (applied, project `utrybuzjkttrmdcrugio`)
 
-Schema lives in `public`; Postgres 17.11. Four tables, all with RLS enabled:
+Schema lives in `public`; Postgres 17.11. Five tables, all with RLS enabled:
 
 - `jobs` — one row per deduplicated offer. `fingerprint` is UNIQUE and is the natural key. Carries `loose_key`, normalized fields, `raw jsonb`, `score`/`score_breakdown`/`scored_at`, `notified_at`, and `first_seen_at`/`last_seen_at`.
 - `job_sources` — every portal occurrence, `unique (job_id, source, url)`, cascade delete.
 - `scrape_runs` — telemetry per run: `source`, `params jsonb`, `status` (`running`/`ok`/`error`), `rows_fetched`, `rows_new`, `error`.
-- `push_subscriptions` — one row per browser subscription: `user_id` (cascade delete on `auth.users`), `endpoint` UNIQUE, `p256dh`, `auth`, `user_agent`, timestamps. It is the only table the browser may write. `authenticated` holds `SELECT`/`INSERT`/`UPDATE`/`DELETE` but every policy requires `is_owner() and user_id = auth.uid()`, so a second account cannot plant a subscription and receive the owner's offers. `service_role` reads it to push; `anon` has no grants.
+- `push_subscriptions` — one row per browser subscription: `user_id` (cascade delete on `auth.users`), `endpoint` UNIQUE, `p256dh`, `auth`, `user_agent`, timestamps. `authenticated` holds `SELECT`/`INSERT`/`UPDATE`/`DELETE` but every policy requires `is_owner() and user_id = auth.uid()`, so a second account cannot plant a subscription and receive the owner's offers. `service_role` reads it to push; `anon` has no grants.
+- `job_state` — the owner's triage flags for an offer: `user_id` + `job_id` with `unique (user_id, job_id)`, `seen_at`, `saved_at`, timestamps, cascade delete on both parents. **NULL means "not set"**, so clearing a flag is an UPDATE that nulls the column, never a DELETE. `authenticated` holds `SELECT`/`INSERT`/`UPDATE` only — no `DELETE`, no `TRUNCATE` — and every policy requires `is_owner() and user_id = auth.uid()`. `anon` has no grants at all. `jobs` stays `SELECT`-only for `authenticated`: the browser writes flags here and can never mutate a scraped row. The migration is recorded in the dashboard history as `job_state_owner_flags` (20261116162204), matching the project's convention of applying schema through the Supabase migration history rather than committing SQL files. Verified: `anon` gets `42501 permission denied` on both read and write; an owner JWT inserts and reads its own row through RLS; a different authenticated account is refused with `new row violates row-level security policy`.
 
 Write path is one RPC: `public.upsert_job(payload jsonb) returns uuid`. It upserts by `fingerprint` and folds in every `sources[]` entry. Merge rules, in order of importance:
 
@@ -215,7 +216,9 @@ Default privileges for `tables`, `sequences` and `functions` are now revoked for
 
 Astro 5 + React 19 islands, `output: "static"`, built with **npm** (no Tailwind, no CDN assets). One page (`src/pages/index.astro`) renders `<OfferBoard client:only="react" />`; the island is the whole app and reads Supabase directly from the browser.
 
-- **Read-only by design.** The UI only runs `SELECT`s through the publishable key plus the authenticated RLS policies; it never writes. Writable owner state (`seen`/`applied`) does not exist yet.
+- **Not read-only any more — `job_state` is the exception.** The UI reads `jobs` with `SELECT` only, and its one write path is `upsert` on `job_state` (`onConflict: "user_id,job_id"`), where marking seen/saved sets or clears `seen_at`/`saved_at`. Only the flipped column travels in the payload, so a seen toggle can never clear `saved_at` (verified against the live DB with PostgREST's exact upsert shape). The toggle is optimistic and **rolls back** if the write fails, so the screen never claims a flag the database does not hold. A failed `job_state` read is reported rather than swallowed: rendering every offer as unseen would be a quiet lie.
+- **Triage and day grouping.** `src/lib/triage.ts` holds the flag map (pure, import-free) and `src/lib/dates.ts` the day buckets. The list groups by `posted_at` when the source gave one, otherwise `first_seen_at` — **never `last_seen_at`**, which the hourly worker advances on every scrape and which would collapse every row into "Hoy". `posted_at` is a Postgres `date`, so it arrives as `YYYY-MM-DD` and is pinned to **local** midnight: `new Date("2026-11-16")` is UTC midnight, which is still the 15th in Buenos Aires and would file today's offers under "Ayer". The `Por día` toggle (default on) restores the flat ranking; grouping is a view mode, not a filter, so `Limpiar` never flattens the list.
+- **The status filter is `Todas` / `Sin ver` / `Guardadas`.** Its chip counts are computed over the rows passing every *other* filter, so the number next to `Sin ver` is what selecting it will show. `Sort: Más recientes` uses the same date as the grouping; it used to sort by `last_seen_at`, which was meaningless because the worker refreshes it for every row it re-scrapes.
 - **The card shows six meters** — Rol, Stack, Nivel, Exp., Ubicación, Recencia — mirroring `SCORE_PARTS` in `src/lib/format.ts`, which duplicates the backend budgets on purpose so drawing a bar needs no round trip. A missing part renders as an empty bar, so rows scored by an older model still display. `inglés` and `no remunerada` chips come from `english_required` and `unpaid`; they are warnings, never score penalties.
 - **Login is email + password** (`signInWithPassword`). There is no magic link and no signup: the owner account is created once in the Supabase dashboard, so nobody can mint a session from the site. The session is persisted by the client and, after it appears, the island calls `rpc("claim_ownership")` exactly once; `true` means this account claimed the app. The deployed origin must be in the Supabase redirect allow-list only if a recovery flow is added later.
 - **`frontend/.env`** carries `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY` (the publishable key — safe to ship) and `PUBLIC_VAPID_PUBLIC_KEY`. `PUBLIC_*` values are inlined at build time; when they are missing `isConfigured` is false and the app renders a "Falta configuración" panel, so a keyless build still succeeds and leaks nothing.
@@ -239,7 +242,7 @@ The repository is public at `https://github.com/mauro-l/autopala` (the directory
 
 ## Not yet decided
 
-- Whether the PWA needs writable owner state (e.g. applied/seen flags). Tables are currently `SELECT`-only for `authenticated` plus the owner-scoped `push_subscriptions`.
+- Whether triage grows beyond seen/saved (e.g. an `applied` stage or per-offer notes). `job_state` is the place for it: add a column and a policy, never a grant on `jobs`.
 - Name: the directory is `pala-automatica`; the original ChatGPT plan called it `Job Hunter`.
 
 ## Reference

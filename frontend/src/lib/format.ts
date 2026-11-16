@@ -15,18 +15,6 @@ export function formatScore(score: number | null): string {
   return score === null ? "—" : String(score);
 }
 
-export function formatAge(value: string | null): string {
-  if (!value) return "sin fecha";
-  const then = new Date(value).getTime();
-  if (Number.isNaN(then)) return "sin fecha";
-  const days = Math.floor((Date.now() - then) / 86_400_000);
-  if (days <= 0) return "hoy";
-  if (days === 1) return "ayer";
-  if (days < 30) return `hace ${days} días`;
-  const months = Math.floor(days / 30);
-  return months === 1 ? "hace un mes" : `hace ${months} meses`;
-}
-
 export type ScorePartKey =
   | "role"
   | "stack"

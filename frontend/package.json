@@ -7,7 +7,8 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check",
+    "check:logic": "node scripts/checks/dates.mjs && node scripts/checks/triage.mjs && node scripts/checks/toggle.mjs && node scripts/checks/filters.mjs"
   },
   "dependencies": {
     "@astrojs/react": "^4.4.2",

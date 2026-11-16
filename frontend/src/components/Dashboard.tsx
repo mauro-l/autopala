@@ -3,13 +3,15 @@ import {
   DEFAULT_FILTERS,
   applyFilters,
   hasActiveFilters,
+  statusCounts,
   summarize,
   type Filters,
 } from "../lib/filters";
 import type { Offer } from "../lib/supabase";
+import type { FlagField, FlagMap } from "../lib/triage";
 import EmptyState from "./EmptyState";
 import FilterBar from "./FilterBar";
-import OfferCard from "./OfferCard";
+import OfferList from "./OfferList";
 import SettingsPanel from "./SettingsPanel";
 import SkeletonList from "./SkeletonList";
 
@@ -17,13 +19,19 @@ export type ClaimState = "idle" | "claiming" | "claimed" | "taken" | "error";
 
 type Props = {
   offers: readonly Offer[];
+  flags: FlagMap;
+  /** `${jobId}:${field}` keys of writes in flight, so their control can wait. */
+  pending: ReadonlySet<string>;
   email: string | null;
   userId: string | null;
   claim: ClaimState;
   loading: boolean;
   error: string | null;
+  /** A failed seen/saved write, already rolled back in the parent. */
+  stateError: string | null;
   onSignOut: () => void;
   onReload: () => void;
+  onToggle: (jobId: string, field: FlagField) => void;
 };
 
 const CLAIM_LABEL: Record<ClaimState, string> = {
@@ -36,19 +44,33 @@ const CLAIM_LABEL: Record<ClaimState, string> = {
 
 export default function Dashboard({
   offers,
+  flags,
+  pending,
   email,
   userId,
   claim,
   loading,
   error,
+  stateError,
   onSignOut,
   onReload,
+  onToggle,
 }: Props) {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  // Grouping is a view mode, not a filter: `Limpiar` must not silently flatten
+  // the list, so it lives beside `filters` instead of inside it.
+  const [grouped, setGrouped] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
-  const visible = useMemo(() => applyFilters(offers, filters), [offers, filters]);
+  const visible = useMemo(
+    () => applyFilters(offers, filters, flags),
+    [offers, filters, flags],
+  );
+  const counts = useMemo(
+    () => statusCounts(offers, filters, flags),
+    [offers, filters, flags],
+  );
   const overview = useMemo(() => summarize(offers), [offers]);
   const filtered = hasActiveFilters(filters);
 
@@ -109,7 +131,10 @@ export default function Dashboard({
         filters={filters}
         visible={visible.length}
         total={offers.length}
+        counts={counts}
+        grouped={grouped}
         onChange={setFilters}
+        onGroupedChange={setGrouped}
       />
 
       {claim === "taken" ? (
@@ -128,6 +153,8 @@ export default function Dashboard({
         </div>
       ) : null}
 
+      {stateError ? <p className="error-box small">{stateError}</p> : null}
+
       {loading && offers.length === 0 ? <SkeletonList count={3} /> : null}
 
       {!loading && offers.length === 0 && !error && claim !== "taken" ? (
@@ -142,18 +169,20 @@ export default function Dashboard({
       {offers.length > 0 && visible.length === 0 ? (
         <EmptyState
           title="Ninguna oferta coincide"
-          hint="Probá con otro puesto, bajá el puntaje mínimo o quitá el filtro de remoto."
+          hint="Probá con otro puesto, bajá el puntaje mínimo, quitá el filtro de remoto o volvé a Todas."
           actionLabel="Limpiar filtros"
           onAction={() => setFilters(DEFAULT_FILTERS)}
         />
       ) : null}
 
       {visible.length > 0 ? (
-        <ul className="offers">
-          {visible.map((offer) => (
-            <OfferCard key={offer.id} offer={offer} />
-          ))}
-        </ul>
+        <OfferList
+          offers={visible}
+          flags={flags}
+          pending={pending}
+          grouped={grouped}
+          onToggle={onToggle}
+        />
       ) : null}
 
       {loading && offers.length > 0 ? <p className="muted small">Actualizando…</p> : null}
@@ -164,7 +193,9 @@ export default function Dashboard({
 
       {!filtered && offers.length > 0 ? (
         <p className="muted small">
-          Ordenadas por puntaje. La lista se lee de la base; el worker la mantiene al día.
+          {grouped
+            ? "Agrupadas por día. La fecha es la de publicación; si no vino, la del día en que entró la oferta."
+            : "Ordenadas por puntaje. La lista se lee de la base; el worker la mantiene al día."}
         </p>
       ) : null}
     </div>

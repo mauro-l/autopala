@@ -65,12 +65,25 @@ export type Offer = {
   score: number | null;
   score_breakdown: ScoreBreakdown | null;
   posted_at: string | null;
+  /** When the offer first entered this app. Drives the day grouping. */
+  first_seen_at: string | null;
   last_seen_at: string | null;
   job_sources: OfferSource[] | null;
 };
 
+/**
+ * `first_seen_at` is selected because the day sections group by it when the
+ * source gave no `posted_at`. `last_seen_at` stays for the tiebreaker.
+ */
 export const OFFER_SELECT =
-  "id,title,company,location,is_remote,score,score_breakdown,posted_at,last_seen_at,job_sources(source,url,url_direct)";
+  "id,title,company,location,is_remote,score,score_breakdown,posted_at,first_seen_at,last_seen_at,job_sources(source,url,url_direct)";
+
+/**
+ * Owner triage rows. `job_state` is scoped by RLS to `user_id = auth.uid()`, so
+ * the owner's rows are what comes back; the filter is passed anyway so the
+ * request is explicit and cheap.
+ */
+export const JOB_STATE_SELECT = "job_id,seen_at,saved_at";
 
 /**
  * The best outbound link for an offer: a canonical employer/ATS URL when a

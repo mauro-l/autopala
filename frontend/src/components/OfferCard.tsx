@@ -1,15 +1,28 @@
-import { NOTIFY_MIN, SCORE_PARTS, formatAge, partPercent } from "../lib/format";
+import { NOTIFY_MIN, SCORE_PARTS, partPercent } from "../lib/format";
+import { formatDayDistance, offerDate } from "../lib/dates";
 import { isRemote } from "../lib/filters";
 import { applyUrl, type Offer } from "../lib/supabase";
+import type { FlagField, JobFlags } from "../lib/triage";
 import ScoreDial from "./ScoreDial";
 
 type Props = {
   offer: Offer;
+  flags: JobFlags;
+  /** True while the corresponding write is in flight, so the control waits. */
+  pendingSeen: boolean;
+  pendingSaved: boolean;
+  onToggle: (field: FlagField) => void;
 };
 
 const MAX_SKILLS = 10;
 
-export default function OfferCard({ offer }: Props) {
+export default function OfferCard({
+  offer,
+  flags,
+  pendingSeen,
+  pendingSaved,
+  onToggle,
+}: Props) {
   const breakdown = offer.score_breakdown;
   const parts = breakdown?.parts ?? {};
   const skills = breakdown?.matched_skills ?? [];
@@ -20,25 +33,64 @@ export default function OfferCard({ offer }: Props) {
   const sources = offer.job_sources ?? [];
   const link = applyUrl(offer);
   const remote = isRemote(offer);
-  const age = formatAge(offer.posted_at ?? offer.last_seen_at);
+  // Same date the day sections group by, and the same calendar-day unit, so the
+  // card can never contradict its own section header. Epoch 0 means "no date".
+  const age = formatDayDistance(offerDate(offer));
   const top = (offer.score ?? 0) >= NOTIFY_MIN;
   const shownSkills = skills.slice(0, MAX_SKILLS);
   const hiddenSkills = skills.length - shownSkills.length;
 
+  const className = ["offer", top ? "is-top" : "", flags.seen ? "is-seen" : "", flags.saved ? "is-saved" : ""]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <li className={top ? "offer is-top" : "offer"}>
+    <li className={className}>
       <ScoreDial score={offer.score} />
 
       <div className="offer-body">
-        <h2 className="offer-title">
-          {link ? (
-            <a href={link} target="_blank" rel="noreferrer noopener">
-              {offer.title}
-            </a>
-          ) : (
-            offer.title
-          )}
-        </h2>
+        <div className="offer-head">
+          <h3 className="offer-title">
+            {link ? (
+              <a href={link} target="_blank" rel="noreferrer noopener">
+                {offer.title}
+              </a>
+            ) : (
+              offer.title
+            )}
+          </h3>
+
+          <div className="offer-actions">
+            <button
+              type="button"
+              className={flags.saved ? "action is-on" : "action"}
+              aria-pressed={flags.saved}
+              aria-label={flags.saved ? "Quitar de guardadas" : "Guardar oferta"}
+              title={flags.saved ? "Quitar de guardadas" : "Guardar oferta"}
+              disabled={pendingSaved}
+              onClick={() => onToggle("saved")}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+                <path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4-7 4V5a1 1 0 0 1 1-1z" />
+              </svg>
+            </button>
+
+            <button
+              type="button"
+              className={flags.seen ? "action is-on" : "action"}
+              aria-pressed={flags.seen}
+              aria-label={flags.seen ? "Marcar como no vista" : "Marcar como vista"}
+              title={flags.seen ? "Marcar como no vista" : "Marcar como vista"}
+              disabled={pendingSeen}
+              onClick={() => onToggle("seen")}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" />
+                <circle cx="12" cy="12" r="2.5" />
+              </svg>
+            </button>
+          </div>
+        </div>
 
         <p className="offer-meta">
           <span>{offer.company}</span>
@@ -54,6 +106,8 @@ export default function OfferCard({ offer }: Props) {
             ·
           </span>
           <span>{age}</span>
+          {flags.saved ? <span className="tag is-saved">guardada</span> : null}
+          {flags.seen ? <span className="tag is-seen">vista</span> : null}
           {remote ? <span className="tag is-remote">remoto</span> : null}
           {level ? <span className="tag is-level">{level}</span> : null}
           {years ? (

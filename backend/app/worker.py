@@ -86,8 +86,10 @@ EVENING_LINKEDIN_TERM = "desarrollador fullstack"
 # Indeed is the slow, rate-limited source: it runs four times, not twelve.
 INDEED_HOURS = (9, 12, 15, 20)
 # The two HTML boards get their own hour so no single slot fires every source.
-WEREMOTO_HOUR = 10
-COMPUTRABAJO_HOUR = 11
+# They run after noon on purpose: the panel is user-started, and a morning boot is
+# not guaranteed, so a midday pass keeps both sources reachable on a late start.
+WEREMOTO_HOUR = 12
+COMPUTRABAJO_HOUR = 13
 
 # Frontend-first, in Spanish and English, because the target roles are frontend
 # junior/trainee postings. A backend-only term like "node.js developer" pulls

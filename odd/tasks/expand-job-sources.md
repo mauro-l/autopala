@@ -118,3 +118,12 @@ Verification observed: `backend/.venv/bin/python -m pytest backend/tests` report
 Render (docs + pricing, checked 2026-11-18): free compute covers **web services only**. Cron jobs and background workers have no free plan — billing starts at the first minute, with a US$1/month minimum per cron job service and about US$7/month for the cheapest 0.5 vCPU worker. A free web service spins down after 15 idle minutes, has 750 instance-hours per workspace per month, cannot use a persistent disk, and may be restarted at any time.
 
 Northflank Sandbox (pricing + docs, checked 2026-11-18): free, no card, **2 services, 2 jobs, 1 database, always on with no sleeping, up to US$20/month of resources**. Cron jobs are allowed on the free plan with a `@hourly` schedule and a per-job time limit, which fits `--once` perfectly. This corrects the earlier claim that GitHub Actions was the only free route; the open risk that remains for every remote host is the source IP, not the compute.
+
+### L16 — The HTML boards move after noon
+User decision: "vamos por la 1 y por mi parte voy a investigar un scrip o algo para automatizar la pc y que se prenda sola a determinada hora."
+
+`WEREMOTO_HOUR` moved from 10 to 12 and `COMPUTRABAJO_HOUR` from 11 to 13, because the panel is user-started and a morning boot is not guaranteed; the morning slots stay as a bonus for days the PC is on early, and the 20:00 pass still does not repeat these two. Measured consequence: a slot is a whole hour, not a 60-second window, because `run_forever` evaluates `due_plans` as soon as it starts. Starting the panel at 12:05 or 12:59 still runs LinkedIn + Indeed x3 + WeRemoto; at 13:30 it still runs LinkedIn + CompuTrabajo x3. A 12:00 start therefore covers every source in the plan.
+
+Verification observed: `backend/.venv/bin/python -m pytest backend/tests` reports **305 passed**; the page-adapter test reads the hour constants instead of literals, so it followed the move without an edit.
+
+Open decision flagged, not changed: the user is investigating an automatic PC start. `AGENTS.md` records "nothing autostarts: no systemd unit, no cron, no linger" as a deliberate choice of the panel, and the environment rule forbids generating Windows Task Scheduler tasks or `.bat` files, so that investigation reopens a recorded decision rather than adding a script.

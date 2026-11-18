@@ -131,8 +131,8 @@ Schedule is local Argentina time (`SCRAPE_TIMEZONE`, default `America/Argentina/
 - LinkedIn runs every slot with `LINKEDIN_TERMS` (11 frontend-first terms, Spanish and English) rotating one per hour from 09:00 to 19:00, `items=20`, `hours_old=168`. The list must hold at least one distinct term per rotation slot, and its length must not divide 24, or the same hour would receive the same term every day. The 20:00 pass does not take its turn in the rotation: it always searches `EVENING_LINKEDIN_TERM = "desarrollador fullstack"`;
 - Indeed runs only at `INDEED_HOURS = (9, 12, 15, 20)`, `items=30`, `country_indeed="Argentina"`, and **never** receives `hours_old`;
 - the full daily set — curated ATS boards via the public board APIs (`greenhouse`, `ashby`), Remote OK and Jooble — runs at `DAILY_HOURS = (9, 20)`, never through jobdrop. The morning pass is the main one and the 20:00 pass is a second chance for a source that failed earlier;
-- WeRemoto runs once at `WEREMOTO_HOUR = 10` from its public listing page (one request);
-- CompuTrabajo runs at `COMPUTRABAJO_HOUR = 11` with `COMPUTRABAJO_TERMS` (3 terms), one request per term and no paging.
+- WeRemoto runs once at `WEREMOTO_HOUR = 12` from its public listing page (one request);
+- CompuTrabajo runs at `COMPUTRABAJO_HOUR = 13` with `COMPUTRABAJO_TERMS` (3 terms), one request per term and no paging. Both boards sit after noon because the panel is user-started and a morning boot is not guaranteed; the 20:00 pass does not repeat them.
 
 Dedupe folds two jobs only when `loose_key` matches **and** (`fingerprint` matches **or** either `location` is empty): 13 of 20 LinkedIn cards arrive with a blank location, which is missing data, not a different city. The surviving row keeps the **first-seen** `fingerprint`/`loose_key` and is never recomputed after the merge — `fingerprint` is the database's unique key, so recomputing from a backfilled location would mint a new identity every run and duplicate rows.
 

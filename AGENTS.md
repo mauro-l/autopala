@@ -127,10 +127,12 @@ Orchestrates `scrape → adapt` (dropping anything past `MAX_POSTING_AGE_DAYS`) 
 
 Schedule is local Argentina time (`SCRAPE_TIMEZONE`, default `America/Argentina/Buenos_Aires`, with a fixed `-03` fallback when the IANA database is unavailable):
 
-- one collection slot per hour in `COLLECTION_WINDOW = (9, 16)` — seven slots, inclusive start, exclusive end;
-- LinkedIn runs every slot with `LINKEDIN_TERMS` (9 frontend-first terms, Spanish and English) rotating one per hour, `items=20`, `hours_old=168`. The list length must not divide 24, or the same hour would receive the same term every day;
+- one collection slot per hour in `COLLECTION_WINDOW = (9, 20)` — eleven slots, inclusive start, exclusive end, so the last run starts at 19:00;
+- LinkedIn runs every slot with `LINKEDIN_TERMS` (11 frontend-first terms, Spanish and English) rotating one per hour, `items=20`, `hours_old=168`. The list must hold at least one distinct term per slot in the window, and its length must not divide 24, or the same hour would receive the same term every day;
 - Indeed runs only at `INDEED_HOURS = (9, 12, 15)`, `items=30`, `country_indeed="Argentina"`, and **never** receives `hours_old`;
-- the curated ATS boards run once at `ATS_HOUR = 9` via the public board APIs (`greenhouse`, `ashby`), never through jobdrop.
+- the curated ATS boards run once at `ATS_HOUR = 9` via the public board APIs (`greenhouse`, `ashby`), never through jobdrop;
+- WeRemoto runs once at `WEREMOTO_HOUR = 10` from its public listing page (one request);
+- CompuTrabajo runs at `COMPUTRABAJO_HOUR = 11` with `COMPUTRABAJO_TERMS` (3 terms), one request per term and no paging.
 
 Dedupe folds two jobs only when `loose_key` matches **and** (`fingerprint` matches **or** either `location` is empty): 13 of 20 LinkedIn cards arrive with a blank location, which is missing data, not a different city. The surviving row keeps the **first-seen** `fingerprint`/`loose_key` and is never recomputed after the merge — `fingerprint` is the database's unique key, so recomputing from a backfilled location would mint a new identity every run and duplicate rows.
 
@@ -156,6 +158,46 @@ The user wants explicit control over when the worker runs, so **nothing autostar
 **First live collection (executed 2026-11-12 11:24 ART, `--once`):** the 11:00 slot ran LinkedIn only, 20 rows in 14 s, all 20 written (20 `job_sources`), 1 `scrape_runs` row with `status: ok`. Enrichment fetched 5 of the 8 allowed details with no throttling, so 5 of 20 rows carry a JD. Best score **73** (`parts`: stack 28, seniority 18, experience 12, location 5, recency 10) and **0 notifications** — exactly the ceiling `AGENTS.md` predicts for LinkedIn-only rows, since `stack` still has 12 of its 40 budget unclaimed. The `score_breakdown` shape is `{parts: {role, stack, seniority, experience, location, recency}, raw_total, total, recency_multiplier, matched_skills, required_years, seniority_level}`; query `score_breakdown->'parts'->>'stack'`, not `score_breakdown->>'stack'`. The first 80+ candidate therefore has to come from an Indeed slot (9/12/15) or the 9:00 ATS boards.
 
 `SupabaseWriter` sends the key on `apikey` always, and adds `Authorization: Bearer <key>` **only when the key starts with `eyJ`**. Legacy `service_role` keys are JWTs and work on either header; new `sb_secret_*` keys are not JWTs and PostgREST rejects them on `Authorization`, so they must travel on `apikey` alone. Both paths are pinned in `backend/tests/test_worker.py`.
+
+## Public HTML boards (implemented, `backend/app/pages.py`, tested)
+
+Two of the fifteen requested portals are reachable as public, server-rendered
+listing pages, so they are read with a stdlib `HTMLParser`: no browser, no
+JavaScript, no paid API. Each plan makes **one** request and a non-200 fails only
+its own `scrape_runs` row, never the other sources in that hour.
+
+| source | hour | terms | robots | verified |
+| --- | --- | --- | --- | --- |
+| `weremoto` | 10 | — (homepage) | `Allow: /`, only `/diagnostics` disallowed | 200, 30 cards, full description in the card |
+| `computrabajo` | 11 | 3 (`desarrollador-frontend`, `react`, `desarrollador-junior`) | listing paths allowed; `Ajax`, `_services` and the faceted query variants disallowed | 200, 20 cards per term, absolute offer URL |
+
+The rest of T1's page candidates are recorded as unusable, not silently skipped:
+**Remoters** answered HTTP 520 twice; **Laborum** is a JavaScript-only shell
+("You need to enable JavaScript to run this app") and a browser is out of scope;
+**Domestika** answered HTTP 403; **SoyFreelancer** publishes only
+`/trabajos-freelance` project listings (`/empleos` is 404) and its robots
+disallows the project detail pages, so it is excluded under the
+traditional-employment rule.
+
+Rules that are easy to break, pinned by `backend/tests/test_pages.py`:
+
+- **The WeRemoto location badge is the one right before the date.** Cards lay the
+  badges out as `[modality or country][date][type][category]`; the first badge is
+  `Remoto`, `Remote 📍` or a country (`🇨🇱 Chile`), so reading the first badge of
+  the card would call a country a modality. Modality badges are canonicalized to
+  `Remoto` / `Híbrido` / `Presencial`; a country badge keeps its name and the
+  scoring filters it as foreign.
+- **CompuTrabajo's company is not always a link.** A confidential employer is
+  plain text inside the same `p.dFlex`, so the paragraph is the fallback when the
+  `offer-grid-article-company-url` anchor is missing.
+- **The offer URL is made absolute and its `#lc=…` fragment is stripped.** The
+  listing serves relative hrefs; a relative or fragmented URL would break the
+  `job_sources` identity.
+- **"Hace 22 horas" is today, "Hace 6 días" is six days back, "Hace más de 30
+  días" keeps 30 as a floor.** The stored field is a `date`, so sub-day precision
+  is deliberately collapsed.
+- **A card without a real title and link is dropped in the parser**, never sent
+  upstream as a titleless row that would mark the whole run as `error`.
 
 ## Notifications (implemented, `backend/app/push.py`, tested)
 

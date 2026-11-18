@@ -196,8 +196,8 @@ class TestSchedule:
     def test_the_ats_boards_run_only_on_the_first_hour(self) -> None:
         first = due_plans(at(ATS_HOUR))
         later = due_plans(at(ATS_HOUR + 1))
-        assert any(p.kind != "jobdrop" for p in first)
-        assert not any(p.kind != "jobdrop" for p in later)
+        assert any(p.kind in {"greenhouse", "ashby"} for p in first)
+        assert not any(p.kind in {"greenhouse", "ashby"} for p in later)
 
     def test_indeed_runs_only_on_its_assigned_hours(self) -> None:
         assert any(p.name == "indeed" for p in due_plans(at(INDEED_HOURS[0])))

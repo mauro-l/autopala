@@ -55,7 +55,13 @@ from app.models import (
     from_jobdrop_row,
     from_jooble_job,
     from_remoteok_job,
+    from_web_page_job,
     sanitize_json,
+)
+from app.pages import (
+    COMPUTRABAJO_TERMS,
+    fetch_computrabajo,
+    fetch_weremoto,
 )
 from app.push import (
     PushConfig,
@@ -67,14 +73,17 @@ from app.scoring import ScoreBreakdown, is_stale, score_job, should_notify
 LOG = logging.getLogger(__name__)
 
 DEFAULT_TIMEZONE = "America/Argentina/Buenos_Aires"
-# One run per hour between 09:00 and 15:59 local time: seven slots a day.
-COLLECTION_WINDOW = (9, 16)
-# Indeed is the slow, rate-limited source: it runs three times, not seven.
+# One run per hour between 09:00 and 19:59 local time: eleven slots a day.
+COLLECTION_WINDOW = (9, 20)
+# Indeed is the slow, rate-limited source: it runs three times, not eleven.
 INDEED_HOURS = (9, 12, 15)
 # The curated ATS list is cheap and stable, so a single daily pass is enough.
 ATS_HOUR = 9
 REMOTEOK_HOUR = 9
 JOOBLE_HOUR = 9
+# The two HTML boards get their own hour so no single slot fires every source.
+WEREMOTO_HOUR = 10
+COMPUTRABAJO_HOUR = 11
 
 # Frontend-first, in Spanish and English, because the target roles are frontend
 # junior/trainee postings. A backend-only term like "node.js developer" pulls
@@ -93,6 +102,8 @@ LINKEDIN_TERMS = (
     "next.js developer",
     "pasantia desarrollo web",
     "react native junior",
+    "desarrollador typescript",
+    "react native developer",
 )
 INDEED_TERMS = ("desarrollador frontend", "frontend junior", "react developer")
 JOOBLE_TERMS = INDEED_TERMS
@@ -165,7 +176,7 @@ def in_collection_window(
 
 
 def linkedin_term_for(now: datetime, *, tz: str = DEFAULT_TIMEZONE) -> str:
-    """Rotate the LinkedIn search term once per hour across the seven slots."""
+    """Rotate the LinkedIn search term once per hour across the collection window."""
     local = _local(now, tz)
     slot = local.date().toordinal() * 24 + local.hour
     return LINKEDIN_TERMS[slot % len(LINKEDIN_TERMS)]
@@ -180,6 +191,7 @@ def due_plans(
     indeed_terms: Sequence[str] = INDEED_TERMS,
     ats_boards: Sequence[tuple[str, str, str]] = ATS_BOARDS,
     jooble_enabled: bool = False,
+    computrabajo_terms: Sequence[str] = COMPUTRABAJO_TERMS,
 ) -> list[SourcePlan]:
     """Build the plans due at ``now``; empty outside the window."""
     local = _local(now, tz)
@@ -250,6 +262,19 @@ def due_plans(
                 )
             )
 
+    if local.hour == WEREMOTO_HOUR:
+        plans.append(SourcePlan(name="weremoto", kind="weremoto"))
+
+    if local.hour == COMPUTRABAJO_HOUR:
+        for term in computrabajo_terms:
+            plans.append(
+                SourcePlan(
+                    name=f"computrabajo:{term}",
+                    kind="computrabajo",
+                    params={"term": term},
+                )
+            )
+
     return plans
 
 
@@ -278,6 +303,8 @@ def adapt_rows(plan: SourcePlan, rows: Iterable[Mapping[str, Any]]) -> list[Norm
         return [from_remoteok_job(row) for row in rows]
     if plan.kind == "jooble":
         return [from_jooble_job(row) for row in rows]
+    if plan.kind in {"weremoto", "computrabajo"}:
+        return [from_web_page_job(row) for row in rows]
     raise ValueError(f"unknown source kind: {plan.kind}")
 
 
@@ -1013,6 +1040,13 @@ def build_scraper(
             return _fetch_remoteok(transport=request)
         if plan.kind == "jooble":
             return _fetch_jooble(plan, api_key=jooble_api_key, transport=request)
+        if plan.kind == "weremoto":
+            return fetch_weremoto(transport=request)
+        if plan.kind == "computrabajo":
+            term = str(plan.params.get("term") or "")
+            if not term:
+                raise ValueError("computrabajo plan without a search term")
+            return fetch_computrabajo(term, transport=request)
         return _fetch_ats(plan, transport=request)
 
     return scrape

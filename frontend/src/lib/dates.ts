@@ -54,6 +54,11 @@ export function offerDate(offer: DatedOffer): number {
   return parseDate(offer.posted_at) || parseDate(offer.first_seen_at);
 }
 
+/** The date the app first observed an offer. 0 means "not recorded". */
+export function firstSeenDate(offer: DatedOffer): number {
+  return parseDate(offer.first_seen_at);
+}
+
 /** Local calendar day as `YYYY-MM-DD`, or `undated`. */
 export function dayKey(epochMs: number): string {
   if (!epochMs || Number.isNaN(epochMs)) return UNDATED_KEY;
@@ -113,11 +118,12 @@ export function formatDayDistance(epochMs: number, now: number = Date.now()): st
 export function groupByDay<T extends DatedOffer>(
   offers: readonly T[],
   now: number = Date.now(),
+  dateOf: (offer: T) => number = offerDate,
 ): DayGroup<T>[] {
   const buckets = new Map<string, DayGroup<T>>();
 
   for (const offer of offers) {
-    const at = offerDate(offer);
+    const at = dateOf(offer);
     const key = dayKey(at);
     const existing = buckets.get(key);
     if (existing) {

@@ -95,6 +95,23 @@ assert.deepEqual(
   ["a", "b", "d"],
   "recent sorts by the offer's own date, not by input order",
 );
+const discoveryOffers = [
+  offer("posted-recent", {
+    score: 99,
+    posted_at: "2026-11-16",
+    first_seen_at: "2026-11-14T10:00:00Z",
+  }),
+  offer("found-later", {
+    score: 40,
+    posted_at: "2026-11-10",
+    first_seen_at: "2026-11-16T10:00:00Z",
+  }),
+];
+assert.deepEqual(
+  ids(applyFilters(discoveryOffers, { ...DEFAULT_FILTERS, sort: "discovered" }, flags)),
+  ["found-later", "posted-recent"],
+  "discovered sorts by first_seen_at rather than the posting date or score",
+);
 
 // --- the input array is never reordered in place
 const input = [offers[3], offers[0], offers[1], offers[2]];
@@ -106,6 +123,7 @@ assert.deepEqual(input, snapshot);
 assert.equal(hasActiveFilters(DEFAULT_FILTERS), false);
 assert.equal(hasActiveFilters({ ...DEFAULT_FILTERS, status: "unseen" }), true);
 assert.equal(hasActiveFilters({ ...DEFAULT_FILTERS, sort: "recent" }), true);
+assert.equal(hasActiveFilters({ ...DEFAULT_FILTERS, sort: "discovered" }), true);
 assert.equal(hasActiveFilters({ ...DEFAULT_FILTERS, query: "   " }), false);
 
 console.log("filters: ok");

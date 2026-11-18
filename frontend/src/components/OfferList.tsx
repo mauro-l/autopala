@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { groupByDay } from "../lib/dates";
+import { firstSeenDate, groupByDay } from "../lib/dates";
+import type { SortKey } from "../lib/filters";
 import type { Offer } from "../lib/supabase";
 import { flagsOf, type FlagField, type FlagMap } from "../lib/triage";
 import OfferCard from "./OfferCard";
@@ -9,6 +10,7 @@ type Props = {
   flags: FlagMap;
   pending: ReadonlySet<string>;
   grouped: boolean;
+  sort: SortKey;
   onToggle: (jobId: string, field: FlagField) => void;
 };
 
@@ -17,7 +19,7 @@ type Props = {
  * Grouping is pure presentation: it takes the list the filters already narrowed
  * and never re-sorts across sections, so the chosen order is kept inside a day.
  */
-export default function OfferList({ offers, flags, pending, grouped, onToggle }: Props) {
+export default function OfferList({ offers, flags, pending, grouped, sort, onToggle }: Props) {
   const renderCard = (offer: Offer) => (
     <OfferCard
       key={offer.id}
@@ -30,8 +32,8 @@ export default function OfferList({ offers, flags, pending, grouped, onToggle }:
   );
 
   const groups = useMemo(
-    () => (grouped ? groupByDay(offers) : []),
-    [grouped, offers],
+    () => (grouped ? groupByDay(offers, Date.now(), sort === "discovered" ? firstSeenDate : undefined) : []),
+    [grouped, offers, sort],
   );
 
   if (!grouped) {

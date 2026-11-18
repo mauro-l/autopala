@@ -73,14 +73,18 @@ from app.scoring import ScoreBreakdown, is_stale, score_job, should_notify
 LOG = logging.getLogger(__name__)
 
 DEFAULT_TIMEZONE = "America/Argentina/Buenos_Aires"
-# One run per hour between 09:00 and 19:59 local time: eleven slots a day.
-COLLECTION_WINDOW = (9, 20)
-# Indeed is the slow, rate-limited source: it runs three times, not eleven.
-INDEED_HOURS = (9, 12, 15)
-# The curated ATS list is cheap and stable, so a single daily pass is enough.
-ATS_HOUR = 9
-REMOTEOK_HOUR = 9
-JOOBLE_HOUR = 9
+# One run per hour between 09:00 and 20:59 local time: twelve slots a day.
+COLLECTION_WINDOW = (9, 21)
+# The full daily set (ATS boards, Remote OK, Jooble) runs twice: the morning pass
+# and one final evening pass, so a source that failed in the morning gets a second
+# chance the same day.
+DAILY_HOURS = (9, 20)
+EVENING_HOUR = DAILY_HOURS[1]
+# The evening pass always asks LinkedIn the same broad term instead of taking its
+# turn in the rotation, so the day ends with full stack coverage.
+EVENING_LINKEDIN_TERM = "desarrollador fullstack"
+# Indeed is the slow, rate-limited source: it runs four times, not twelve.
+INDEED_HOURS = (9, 12, 15, 20)
 # The two HTML boards get their own hour so no single slot fires every source.
 WEREMOTO_HOUR = 10
 COMPUTRABAJO_HOUR = 11
@@ -199,7 +203,11 @@ def due_plans(
         return []
 
     slot = local.date().toordinal() * 24 + local.hour
-    term = linkedin_terms[slot % len(linkedin_terms)]
+    term = (
+        EVENING_LINKEDIN_TERM
+        if local.hour == EVENING_HOUR
+        else linkedin_terms[slot % len(linkedin_terms)]
+    )
     plans = [
         SourcePlan(
             name="linkedin",
@@ -232,7 +240,7 @@ def due_plans(
                 )
             )
 
-    if local.hour == ATS_HOUR:
+    if local.hour in DAILY_HOURS:
         for kind, slug, company in ats_boards:
             plans.append(
                 SourcePlan(
@@ -244,10 +252,10 @@ def due_plans(
                 )
             )
 
-    if local.hour == REMOTEOK_HOUR:
+    if local.hour in DAILY_HOURS:
         plans.append(SourcePlan(name="remoteok", kind="remoteok"))
 
-    if jooble_enabled and local.hour == JOOBLE_HOUR:
+    if jooble_enabled and local.hour in DAILY_HOURS:
         for term in JOOBLE_TERMS:
             plans.append(
                 SourcePlan(

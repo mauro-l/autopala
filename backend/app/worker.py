@@ -53,6 +53,8 @@ from app.models import (
     from_ashby_job,
     from_greenhouse_job,
     from_jobdrop_row,
+    from_jooble_job,
+    from_remoteok_job,
     sanitize_json,
 )
 from app.push import (
@@ -71,6 +73,8 @@ COLLECTION_WINDOW = (9, 16)
 INDEED_HOURS = (9, 12, 15)
 # The curated ATS list is cheap and stable, so a single daily pass is enough.
 ATS_HOUR = 9
+REMOTEOK_HOUR = 9
+JOOBLE_HOUR = 9
 
 # Frontend-first, in Spanish and English, because the target roles are frontend
 # junior/trainee postings. A backend-only term like "node.js developer" pulls
@@ -91,6 +95,10 @@ LINKEDIN_TERMS = (
     "react native junior",
 )
 INDEED_TERMS = ("desarrollador frontend", "frontend junior", "react developer")
+JOOBLE_TERMS = INDEED_TERMS
+JOOBLE_RESULTS = 20
+JOOBLE_API_URL = "https://ar.jooble.org/api/{api_key}"
+REMOTEOK_API_URL = "https://remoteok.com/api"
 
 # Both were verified live against the public board APIs. Never add a slug that
 # has not returned 200, because a wrong slug is a silent empty run.
@@ -171,6 +179,7 @@ def due_plans(
     linkedin_terms: Sequence[str] = LINKEDIN_TERMS,
     indeed_terms: Sequence[str] = INDEED_TERMS,
     ats_boards: Sequence[tuple[str, str, str]] = ATS_BOARDS,
+    jooble_enabled: bool = False,
 ) -> list[SourcePlan]:
     """Build the plans due at ``now``; empty outside the window."""
     local = _local(now, tz)
@@ -223,6 +232,24 @@ def due_plans(
                 )
             )
 
+    if local.hour == REMOTEOK_HOUR:
+        plans.append(SourcePlan(name="remoteok", kind="remoteok"))
+
+    if jooble_enabled and local.hour == JOOBLE_HOUR:
+        for term in JOOBLE_TERMS:
+            plans.append(
+                SourcePlan(
+                    name=f"jooble:{term}",
+                    kind="jooble",
+                    params={
+                        "keywords": term,
+                        "location": "Argentina",
+                        "page": 1,
+                        "ResultOnPage": JOOBLE_RESULTS,
+                    },
+                )
+            )
+
     return plans
 
 
@@ -247,6 +274,10 @@ def adapt_rows(plan: SourcePlan, rows: Iterable[Mapping[str, Any]]) -> list[Norm
     if plan.kind == "ashby":
         employer = plan.company or plan.slug
         return [from_ashby_job(row, employer) for row in rows]
+    if plan.kind == "remoteok":
+        return [from_remoteok_job(row) for row in rows]
+    if plan.kind == "jooble":
+        return [from_jooble_job(row) for row in rows]
     raise ValueError(f"unknown source kind: {plan.kind}")
 
 
@@ -409,6 +440,7 @@ class WorkerConfig:
     service_key: str
     timezone: str = DEFAULT_TIMEZONE
     window: tuple[int, int] = COLLECTION_WINDOW
+    jooble_api_key: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "WorkerConfig":
@@ -434,7 +466,13 @@ class WorkerConfig:
                 "SUPABASE_SERVICE_ROLE_KEY holds a publishable key; use the project secret key"
             )
         tz = (env.get("SCRAPE_TIMEZONE") or "").strip() or DEFAULT_TIMEZONE
-        return cls(base_url=base_url, service_key=service_key, timezone=tz)
+        jooble_api_key = (env.get("JOOBLE_API_KEY") or "").strip() or None
+        return cls(
+            base_url=base_url,
+            service_key=service_key,
+            timezone=tz,
+            jooble_api_key=jooble_api_key,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -867,10 +905,14 @@ def run_collection(
 # --------------------------------------------------------------------------- #
 
 
-def _fetch_ats(plan: SourcePlan) -> list[Mapping[str, Any]]:
+def _fetch_ats(
+    plan: SourcePlan,
+    *,
+    transport: Callable[..., tuple[int, bytes]] = _urllib_transport,
+) -> list[Mapping[str, Any]]:
     template = _ATS_ENDPOINTS[plan.kind]
     url = template.format(slug=plan.slug)
-    status, raw = _urllib_transport(
+    status, raw = transport(
         "GET", url, {"Accept": "application/json"}, None, timeout=30.0
     )
     if status != 200:
@@ -881,8 +923,77 @@ def _fetch_ats(plan: SourcePlan) -> list[Mapping[str, Any]]:
     return list(parsed or [])
 
 
+def _fetch_remoteok(
+    *, transport: Callable[..., tuple[int, bytes]] = _urllib_transport
+) -> list[Mapping[str, Any]]:
+    """Read Remote OK's public feed and discard its non-job legal header row."""
+    status, raw = transport(
+        "GET",
+        REMOTEOK_API_URL,
+        {"Accept": "application/json", "User-Agent": "PalaAutomatica/1.0"},
+        None,
+        timeout=30.0,
+    )
+    if status != 200:
+        raise RuntimeError(f"remoteok returned http {status}")
+    payload: Any = json.loads(_decode(raw))
+    if not isinstance(payload, list):
+        raise RuntimeError("remoteok returned an unexpected response")
+    return [
+        dict(row)
+        for row in payload
+        if isinstance(row, Mapping)
+        and "legal" not in row
+        and row.get("id")
+        and row.get("position")
+    ]
+
+
+def _fetch_jooble(
+    plan: SourcePlan,
+    *,
+    api_key: str | None,
+    transport: Callable[..., tuple[int, bytes]] = _urllib_transport,
+) -> list[Mapping[str, Any]]:
+    """Search Jooble without putting its secret key in plan/run telemetry."""
+    if not api_key:
+        raise MissingConfig("JOOBLE_API_KEY is not set")
+    url = JOOBLE_API_URL.format(api_key=quote(api_key, safe=""))
+    body = json.dumps(
+        {
+            "keywords": str(plan.params.get("keywords") or ""),
+            "location": str(plan.params.get("location") or "Argentina"),
+            "page": int(plan.params.get("page") or 1),
+            "ResultOnPage": int(plan.params.get("ResultOnPage") or JOOBLE_RESULTS),
+        }
+    ).encode("utf-8")
+    try:
+        status, raw = transport(
+            "POST",
+            url,
+            {"Accept": "application/json", "Content-Type": "application/json"},
+            body,
+            timeout=30.0,
+        )
+    except Exception as exc:
+        # The key is embedded in Jooble's required URL path; never copy a
+        # transport exception's URL into scrape_runs.error or application logs.
+        raise RuntimeError(
+            f"{plan.name} request failed ({type(exc).__name__})"
+        ) from None
+    if status != 200:
+        raise RuntimeError(f"{plan.name} returned http {status}")
+    parsed: Any = json.loads(_decode(raw))
+    if not isinstance(parsed, Mapping) or not isinstance(parsed.get("jobs"), list):
+        raise RuntimeError(f"{plan.name} returned an unexpected response")
+    return [dict(row) for row in parsed["jobs"] if isinstance(row, Mapping)]
+
+
 def build_scraper(
     scrape_jobs: Callable[..., Any] | None = None,
+    *,
+    jooble_api_key: str | None = None,
+    transport: Callable[..., tuple[int, bytes]] | None = None,
 ) -> Callable[[SourcePlan], list[Mapping[str, Any]]]:
     """Build the real scraper, importing jobdrop lazily so tests stay light."""
     if scrape_jobs is None:
@@ -890,13 +1001,19 @@ def build_scraper(
 
         scrape_jobs = imported
 
+    request = transport or _urllib_transport
+
     def scrape(plan: SourcePlan) -> list[Mapping[str, Any]]:
         if plan.kind == "jobdrop":
             frame = scrape_jobs(**dict(plan.params))
             if hasattr(frame, "to_dict"):
                 return frame.to_dict("records")
             return list(frame)
-        return _fetch_ats(plan)
+        if plan.kind == "remoteok":
+            return _fetch_remoteok(transport=request)
+        if plan.kind == "jooble":
+            return _fetch_jooble(plan, api_key=jooble_api_key, transport=request)
+        return _fetch_ats(plan, transport=request)
 
     return scrape
 
@@ -951,7 +1068,7 @@ def run_forever(
     """Wake on the hour and run whatever is due. Never returns on its own."""
     env_map = env if env is not None else load_env(_default_env_path())
     config = WorkerConfig.from_env(env_map)
-    scrape = scrape or build_scraper()
+    scrape = scrape or build_scraper(jooble_api_key=config.jooble_api_key)
     if writer is None:
         writer = SupabaseWriter(config.base_url, config.service_key)
     if notifier is None:
@@ -960,7 +1077,12 @@ def run_forever(
 
     while True:
         moment = clock()
-        plans = due_plans(moment, tz=config.timezone, window=config.window)
+        plans = due_plans(
+            moment,
+            tz=config.timezone,
+            window=config.window,
+            jooble_enabled=config.jooble_api_key is not None,
+        )
         if plans:
             try:
                 result = run_collection(
@@ -998,11 +1120,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    config = WorkerConfig.from_env(load_env(_default_env_path()))
+    env_map = load_env(_default_env_path())
+    config = WorkerConfig.from_env(env_map)
     writer: Any = RecordingWriter() if args.dry_run else SupabaseWriter(
         config.base_url, config.service_key
     )
-    scrape = build_scraper()
+    scrape = build_scraper(jooble_api_key=config.jooble_api_key)
     # Pacing lives inside the fetcher, so the worker cannot burst the endpoint.
     fetcher: Any = None if args.no_enrich else LinkedInDescriptionFetcher()
     # A dry run must not ring a real phone, so notifications stay off there.
@@ -1018,7 +1141,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
-    plans = due_plans(datetime.now(timezone.utc), tz=config.timezone, window=config.window)
+    plans = due_plans(
+        datetime.now(timezone.utc),
+        tz=config.timezone,
+        window=config.window,
+        jooble_enabled=config.jooble_api_key is not None,
+    )
     if not plans:
         LOG.info("nothing due at this hour")
         return 0

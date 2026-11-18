@@ -26,6 +26,7 @@ from app.worker import (
     SupabaseWriter,
     WorkerConfig,
     adapt_rows,
+    build_scraper,
     dedupe,
     due_plans,
     in_collection_window,
@@ -214,6 +215,19 @@ class TestSchedule:
         for candidate in indeed:
             assert "hours_old" not in candidate.params
 
+    def test_public_sources_are_daily_optional_and_exclude_project_only_sites(self) -> None:
+        enabled = due_plans(at(ATS_HOUR), jooble_enabled=True)
+        disabled = due_plans(at(ATS_HOUR))
+
+        assert any(candidate.kind == "remoteok" for candidate in enabled)
+        assert len([candidate for candidate in enabled if candidate.kind == "jooble"]) == 3
+        assert not any(candidate.kind == "jooble" for candidate in disabled)
+        assert not any(candidate.name in {"workana", "freelancer"} for candidate in enabled)
+        assert not any(
+            candidate.kind in {"remoteok", "jooble"}
+            for candidate in due_plans(at(ATS_HOUR + 1), jooble_enabled=True)
+        )
+
 
 class TestPayload:
     def test_the_payload_matches_the_rpc_contract(self) -> None:
@@ -301,6 +315,101 @@ class TestAdapt:
     def test_unknown_kinds_are_rejected_loudly(self) -> None:
         with pytest.raises(ValueError):
             adapt_rows(plan("mystery", "mystery"), [{}])
+
+class TestPublicApiScrapers:
+    def test_public_api_rows_map_fields_and_keep_safe_listing_urls(self) -> None:
+        remote_payload = [
+            {"legal": "API Terms of Service"},
+            {
+                "id": "remote-1",
+                "position": "Desarrollador Junior React",
+                "company": "Acme",
+                "location": "Remoto, Argentina",
+                "description": "<p>React and TypeScript</p>",
+                "date": "2026-11-11T10:00:00Z",
+                "url": "remoteOK.com/remote-jobs/remote-1",
+            },
+        ]
+        jooble_payload = {
+            "jobs": [
+                {
+                    "id": 123,
+                    "title": "Desarrollador Frontend Junior",
+                    "company": "Acme",
+                    "location": "Remoto, Argentina",
+                    "snippet": "React y TypeScript",
+                    "type": "Full-time",
+                    "link": "ar.jooble.org/jdp/123",
+                }
+            ]
+        }
+
+        def transport(method, url, headers, body, *, timeout):
+            if url == "https://remoteok.com/api":
+                return 200, json.dumps(remote_payload).encode()
+            return 200, json.dumps(jooble_payload).encode()
+
+        scraper = build_scraper(
+            scrape_jobs=lambda **_: [], jooble_api_key="test-key", transport=transport
+        )
+        remote_plan = plan("remoteok", "remoteok")
+        jooble_plan = plan("jooble:frontend", "jooble")
+        remote_job = adapt_rows(remote_plan, scraper(remote_plan))[0]
+        jooble_job = adapt_rows(jooble_plan, scraper(jooble_plan))[0]
+        invalid_job = adapt_rows(
+            remote_plan,
+            [dict(remote_payload[1], url="javascript:alert(1)")],
+        )[0]
+
+        assert remote_job.is_remote and remote_job.description == "React and TypeScript"
+        assert remote_job.sources[0].url == "https://remoteOK.com/remote-jobs/remote-1"
+        assert jooble_job.is_remote and jooble_job.job_type == "Full-time"
+        assert jooble_job.sources[0].url == "https://ar.jooble.org/jdp/123"
+        assert jooble_job.posted_at is None
+        assert invalid_job.sources[0].url == ""
+
+    def test_jooble_key_is_optional_and_confined(self, caplog) -> None:
+        base_env = {
+            "SUPABASE_URL": "https://example.supabase.co",
+            "SUPABASE_SERVICE_ROLE_KEY": "service-secret",
+        }
+        assert WorkerConfig.from_env(base_env).jooble_api_key is None
+        assert not any(p.kind == "jooble" for p in due_plans(at(ATS_HOUR)))
+
+        no_key_calls: list[str] = []
+        no_key_scraper = build_scraper(
+            scrape_jobs=lambda **_: [],
+            transport=lambda method, url, headers, body, *, timeout: (
+                no_key_calls.append(url) or (200, b'{"jobs":[]}')
+            ),
+        )
+        with pytest.raises(MissingConfig, match="JOOBLE_API_KEY"):
+            no_key_scraper(plan("jooble:frontend", "jooble"))
+        assert no_key_calls == []
+
+        secret = "private-key"
+        config = WorkerConfig.from_env({**base_env, "JOOBLE_API_KEY": secret})
+        assert secret not in repr(config)
+
+        def failed_transport(method, url, headers, body, *, timeout):
+            raise RuntimeError(f"failed request to {url}")
+
+        scraper = build_scraper(
+            scrape_jobs=lambda **_: [], jooble_api_key=secret, transport=failed_transport
+        )
+        candidate = SourcePlan(
+            name="jooble:frontend",
+            kind="jooble",
+            params={"keywords": "frontend", "location": "Argentina"},
+        )
+        writer = FakeWriter()
+        result = run_collection(
+            [candidate], scrape=scraper, writer=writer, today=TODAY
+        )
+        telemetry = json.dumps({"runs": writer.runs, "payloads": writer.payloads})
+        assert secret not in telemetry
+        assert secret not in result.runs[0].error
+        assert secret not in caplog.text
 
 
 class TestDedupe:
@@ -419,6 +528,50 @@ class TestRunCollection:
         assert failed.status == "error"
         assert "exploded" in failed.error
         assert len(result.jobs) == 1
+
+    def test_public_api_jobs_dedupe_and_survive_partial_source_failure(self) -> None:
+        remoteok = {
+            "id": "remote-1",
+            "position": "Desarrollador Junior React",
+            "company": "Acme",
+            "location": "Remoto, Argentina",
+            "description": "React and TypeScript developer",
+            "date": TODAY.isoformat(),
+            "url": "remoteOK.com/remote-jobs/remote-1",
+        }
+        jooble = {
+            "id": 123,
+            "title": "Desarrollador Junior React",
+            "company": "Acme",
+            "location": "Remoto, Argentina",
+            "snippet": "React developer",
+            "type": "Full-time",
+            "link": "ar.jooble.org/jdp/123",
+        }
+        writer = FakeWriter()
+        plans = [
+            plan("remoteok", "remoteok"),
+            plan("jooble:frontend", "jooble"),
+            plan("jooble:other", "jooble"),
+        ]
+        result = run_collection(
+            plans,
+            scrape=FakeScraper(
+                {"remoteok": [remoteok], "jooble:frontend": [jooble]},
+                failures={"jooble:other"},
+            ),
+            writer=writer,
+            today=TODAY,
+        )
+
+        assert len(result.jobs) == 1
+        assert len(writer.payloads) == 1
+        assert {source["source"] for source in writer.payloads[0]["sources"]} == {
+            "remoteok",
+            "jooble",
+        }
+        assert writer.payloads[0]["description"] == remoteok["description"]
+        assert [run.status for run in result.runs] == ["ok", "ok", "error"]
 
     def test_every_plan_closes_its_scrape_run(self) -> None:
         writer = FakeWriter()
@@ -614,7 +767,6 @@ class TestEnvAndConfig:
             {"SUPABASE_URL": "https://example.supabase.co", "SUPABASE_SERVICE_ROLE_KEY": "secret"}
         )
         assert config.timezone == "America/Argentina/Buenos_Aires"
-
 
 class TestSupabaseWriter:
     def test_the_rpc_call_posts_the_payload_under_its_argument_name(self) -> None:

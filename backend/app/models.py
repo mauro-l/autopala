@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 from app.normalize import (
     make_fingerprint,
@@ -71,6 +72,34 @@ def _clean_str(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _http_url(value: object) -> str | None:
+    """Normalize a source URL to HTTP(S), rejecting non-web schemes."""
+    text = _clean_str(value)
+    if text is None or any(character.isspace() for character in text):
+        return None
+    if text.startswith("//"):
+        text = f"https:{text}"
+    elif not re.match(r"^https?://", text, flags=re.IGNORECASE):
+        parsed = urlsplit(text)
+        if parsed.scheme:
+            return None
+        text = f"https://{text.lstrip('/')}"
+    try:
+        parsed = urlsplit(text)
+        # Accessing .port validates malformed and out-of-range port numbers.
+        parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
+    return text
 
 
 def strip_html(value: object) -> str:
@@ -233,6 +262,60 @@ def from_ashby_job(job: Mapping[str, Any], company: str | None) -> NormalizedJob
             url=_clean_str(job.get("jobUrl")) or "",
             source_job_id=_clean_str(job.get("id")),
             url_direct=_clean_str(job.get("applyUrl")) or _clean_str(job.get("jobUrl")),
+        ),
+        raw=job,
+    )
+
+
+def from_remoteok_job(job: Mapping[str, Any]) -> NormalizedJob:
+    """Build a job from one row of Remote OK's public JSON feed."""
+    listing_url = _http_url(job.get("url"))
+    direct_url = _http_url(job.get("apply_url"))
+    return _build(
+        company=job.get("company"),
+        title=job.get("position"),
+        location=job.get("location"),
+        # Remote OK is a remote-only job board; some listings omit a location.
+        is_remote=True,
+        description=strip_html(job.get("description")),
+        posted_at=job.get("date"),
+        salary_min=job.get("salary_min"),
+        salary_max=job.get("salary_max"),
+        salary_currency=job.get("salary_currency"),
+        job_type=job.get("job_type") or job.get("type"),
+        source=JobSource(
+            source="remoteok",
+            url=listing_url or "",
+            source_job_id=_clean_str(job.get("id")),
+            url_direct=direct_url,
+        ),
+        raw=job,
+    )
+
+
+def from_jooble_job(job: Mapping[str, Any]) -> NormalizedJob:
+    """Build a job from one result in Jooble's public REST search response."""
+    location = _clean_str(job.get("location")) or ""
+    return _build(
+        company=job.get("company"),
+        title=job.get("title"),
+        location=location,
+        is_remote=any(
+            marker in normalize_location(location) for marker in ("remote", "remoto")
+        ),
+        description=job.get("snippet"),
+        # Jooble exposes the last update, not the original publication date.
+        posted_at=None,
+        salary_min=None,
+        salary_max=None,
+        salary_currency=None,
+        job_type=job.get("type"),
+        source=JobSource(
+            source="jooble",
+            url=_http_url(job.get("link")) or "",
+            source_job_id=_clean_str(job.get("id")),
+            # Jooble's search result link is its own listing, not a direct apply URL.
+            url_direct=_http_url(job.get("apply_url")),
         ),
         raw=job,
     )

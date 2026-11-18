@@ -1,9 +1,9 @@
-import { offerDate } from "./dates";
+import { firstSeenDate, offerDate } from "./dates";
 import { NOTIFY_MIN, SOLID_MIN } from "./format";
 import type { Offer } from "./supabase";
 import { flagsOf, type FlagMap } from "./triage";
 
-export type SortKey = "score" | "recent";
+export type SortKey = "score" | "recent" | "discovered";
 
 /**
  * Triage state filter. `unseen` is the triage queue: offers with no seen
@@ -98,6 +98,10 @@ export function applyFilters(
     // recent" list and the grouped one agree. Sorting by `last_seen_at` was
     // meaningless: the hourly worker advances it for every row it re-scrapes.
     visible.sort((a, b) => offerDate(b) - offerDate(a));
+  } else if (filters.sort === "discovered") {
+    // Newest-first by when this app first saw each offer, independently of its
+    // original publication date and the worker's frequently updated last_seen_at.
+    visible.sort((a, b) => firstSeenDate(b) - firstSeenDate(a));
   } else {
     visible.sort(
       (a, b) =>

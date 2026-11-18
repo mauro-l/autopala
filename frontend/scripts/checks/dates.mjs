@@ -2,7 +2,15 @@
 // Node >= 22.18 strips the TypeScript types, so the real module is exercised
 // with no test framework and no extra dependency.
 import assert from "node:assert/strict";
-import { dayDifference, dayLabel, dayKey, formatDayDistance, groupByDay, offerDate } from "../../src/lib/dates.ts";
+import {
+  dayDifference,
+  dayLabel,
+  dayKey,
+  firstSeenDate,
+  formatDayDistance,
+  groupByDay,
+  offerDate,
+} from "../../src/lib/dates.ts";
 
 // Local dates, so the cases do not depend on the machine timezone.
 const at = (y, m, d, h = 12) => new Date(y, m - 1, d, h, 0, 0, 0).getTime();
@@ -25,6 +33,11 @@ assert.equal(
   "last_seen_at must never be used: the hourly worker advances it on every scrape",
 );
 assert.equal(offerDate({ posted_at: "not-a-date", first_seen_at: null }), 0);
+assert.equal(
+  firstSeenDate({ posted_at: "2026-11-10", first_seen_at: "2026-11-16T10:00:00Z" }),
+  new Date("2026-11-16T10:00:00Z").getTime(),
+  "discovery date must use first_seen_at even when posted_at exists",
+);
 
 // A date-only posted_at is a calendar date, not an instant. Parsing it as UTC
 // midnight would file it under Nov 15 for a Buenos Aires user (UTC-3).
@@ -68,6 +81,21 @@ assert.deepEqual(
   ],
 );
 assert.deepEqual(groupByDay([], NOW), []);
+const discoveryItems = [
+  { id: "a", posted_at: "2026-11-10", first_seen_at: new Date(at(2026, 11, 16)).toISOString() },
+  { id: "b", posted_at: "2026-11-16", first_seen_at: new Date(at(2026, 11, 15)).toISOString() },
+  { id: "c", posted_at: null, first_seen_at: new Date(at(2026, 11, 16, 1)).toISOString() },
+  { id: "d", posted_at: "2026-11-16", first_seen_at: null },
+];
+assert.deepEqual(
+  groupByDay(discoveryItems, NOW, firstSeenDate).map((group) => [group.key, group.items.map((i) => i.id)]),
+  [
+    ["2026-11-16", ["a", "c"]],
+    ["2026-11-15", ["b"]],
+    ["undated", ["d"]],
+  ],
+  "discovery grouping must bucket by first_seen_at instead of posted_at",
+);
 assert.deepEqual(
   items.map((i) => i.id),
   ["a", "b", "c", "d"],

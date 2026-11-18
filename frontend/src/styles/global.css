@@ -1,20 +1,20 @@
 /* Design tokens first: every component below consumes these, so a retune is one edit. */
 :root {
-  --bg: #0b0e14;
-  --panel: #121722;
-  --panel-2: #0f1520;
-  --sunken: #0c111a;
-  --line: #222a3a;
-  --line-soft: #1a2231;
-  --text: #e6ebf5;
-  --muted: #8d9ab3;
-  --accent: #4f8cff;
-  --accent-soft: #1b2a45;
-  --good: #3ddc97;
+  --bg: #0b0d14;
+  --panel: #141925;
+  --panel-2: #101520;
+  --sunken: #101520;
+  --line: #252d3d;
+  --line-soft: #202635;
+  --text: #edf1fb;
+  --muted: #8994aa;
+  --accent: #5b91f5;
+  --accent-soft: #1b2b49;
+  --good: #36d69b;
   --warn: #f0b429;
   --bad: #ff6b6b;
-  --radius: 14px;
-  --radius-sm: 10px;
+  --radius: 20px;
+  --radius-sm: 14px;
   --gap: 12px;
   --pad: 16px;
   --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
@@ -33,7 +33,7 @@ body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 16px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -156,20 +156,20 @@ code {
 
 .brand-mark {
   flex: none;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
   display: grid;
   place-items: center;
   background: linear-gradient(150deg, var(--accent), #8ab4ff);
   color: #08101f;
   font-weight: 800;
-  font-size: 0.85rem;
+  font-size: 1.15rem;
 }
 
 .brand-name {
   font-weight: 650;
-  font-size: 0.98rem;
+  font-size: 1.15rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -177,7 +177,7 @@ code {
 
 .brand-sub {
   color: var(--muted);
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   line-height: 1.2;
 }
 
@@ -272,20 +272,21 @@ select {
 .stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 12px;
+  margin: 8px 0;
 }
 
 .stat {
-  padding: 10px 12px;
+  padding: 16px 18px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: 17px;
   display: grid;
-  gap: 2px;
+  gap: 5px;
 }
 
 .stat-value {
-  font-size: 1.3rem;
+  font-size: 1.75rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
@@ -306,11 +307,142 @@ select {
 
 .filters {
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 14px;
+  padding: 16px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+}
+
+.searchline {
+  display: flex;
+  gap: 10px;
+}
+
+.search {
+  flex: 1;
+  min-width: 0;
+  padding: 13px 16px;
+  font-size: 1rem;
+  outline: none;
+}
+
+.search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.filter-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 14px;
+  color: var(--text);
+  background: #192131;
+  border-color: var(--line);
+  white-space: nowrap;
+}
+
+.filter-toggle:hover:not(:disabled) {
+  background: #202a3d;
+}
+
+.filter-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 999px;
+  color: #a9c8ff;
+  background: var(--accent-soft);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-tabs {
+  display: flex;
+  gap: 7px;
+  padding-top: 12px;
+  border-top: 1px solid #222b3a;
+}
+
+.status-tab {
+  flex: 1;
+  padding: 9px 8px;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+  border-radius: 11px;
+  font-weight: 500;
+  font-size: 0.86rem;
+}
+
+.status-tab:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+.status-tab.is-active {
+  color: #eaf1ff;
+  background: var(--accent-soft);
+  border-color: #4d82e4;
+}
+
+.status-tab .chip-count {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 2px 7px;
+  color: #aebbd3;
+  background: #202a3d;
+  border: 0;
+}
+
+.results-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.advanced-content {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid #222b3a;
+}
+
+.advanced-content[hidden] {
+  display: none;
+}
+
+.filter-group {
+  display: grid;
+  gap: 7px;
+}
+
+.filter-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.clear-filters {
+  margin-left: auto;
+  padding: 4px 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font-weight: 400;
+}
+
+.clear-filters:hover:not(:disabled) {
+  color: var(--text);
+  background: transparent;
 }
 
 .filter-row {
@@ -863,6 +995,69 @@ select {
   border: 1px solid var(--line-soft);
   font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 520px) {
+  .stats {
+    gap: 8px;
+  }
+
+  .stat {
+    padding: 12px 10px;
+  }
+
+  .stat-value {
+    font-size: 1.5rem;
+  }
+
+  .stat-label {
+    font-size: 0.65rem;
+  }
+
+  .searchline {
+    gap: 7px;
+  }
+
+  .search {
+    padding: 12px;
+    font-size: 0.9rem;
+  }
+
+  .filter-toggle {
+    padding: 0 10px;
+    font-size: 0.82rem;
+  }
+
+  .status-tabs {
+    gap: 3px;
+  }
+
+  .status-tab {
+    padding: 9px 3px;
+    font-size: 0.76rem;
+  }
+
+  .status-tab .chip-count {
+    margin-left: 2px;
+    padding: 2px 5px;
+  }
+
+  .advanced-content {
+    gap: 12px;
+  }
+
+  .advanced-content .filter-group,
+  .advanced-content .sort {
+    width: 100%;
+  }
+
+  .advanced-content .filter-group .chips {
+    width: 100%;
+  }
+
+  .advanced-content .filter-group .chip {
+    flex: 1;
+  }
 }
 
 .chip.is-active .chip-count {

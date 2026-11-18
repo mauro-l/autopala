@@ -181,6 +181,7 @@ export default function Dashboard({
           flags={flags}
           pending={pending}
           grouped={grouped}
+          sort={filters.sort}
           onToggle={onToggle}
         />
       ) : null}
@@ -194,7 +195,9 @@ export default function Dashboard({
       {!filtered && offers.length > 0 ? (
         <p className="muted small">
           {grouped
-            ? "Agrupadas por día. La fecha es la de publicación; si no vino, la del día en que entró la oferta."
+            ? filters.sort === "discovered"
+              ? "Agrupadas por el día en que la app encontró cada oferta."
+              : "Agrupadas por día. La fecha es la de publicación; si no vino, la del día en que entró la oferta."
             : "Ordenadas por puntaje. La lista se lee de la base; el worker la mantiene al día."}
         </p>
       ) : null}

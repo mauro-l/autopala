@@ -55,7 +55,13 @@ from app.models import (
     from_jobdrop_row,
     from_jooble_job,
     from_remoteok_job,
+    from_web_page_job,
     sanitize_json,
+)
+from app.pages import (
+    COMPUTRABAJO_TERMS,
+    fetch_computrabajo,
+    fetch_weremoto,
 )
 from app.push import (
     PushConfig,
@@ -67,14 +73,23 @@ from app.scoring import ScoreBreakdown, is_stale, score_job, should_notify
 LOG = logging.getLogger(__name__)
 
 DEFAULT_TIMEZONE = "America/Argentina/Buenos_Aires"
-# One run per hour between 09:00 and 15:59 local time: seven slots a day.
-COLLECTION_WINDOW = (9, 16)
-# Indeed is the slow, rate-limited source: it runs three times, not seven.
-INDEED_HOURS = (9, 12, 15)
-# The curated ATS list is cheap and stable, so a single daily pass is enough.
-ATS_HOUR = 9
-REMOTEOK_HOUR = 9
-JOOBLE_HOUR = 9
+# One run per hour between 09:00 and 20:59 local time: twelve slots a day.
+COLLECTION_WINDOW = (9, 21)
+# The full daily set (ATS boards, Remote OK, Jooble) runs twice: the morning pass
+# and one final evening pass, so a source that failed in the morning gets a second
+# chance the same day.
+DAILY_HOURS = (9, 20)
+EVENING_HOUR = DAILY_HOURS[1]
+# The evening pass always asks LinkedIn the same broad term instead of taking its
+# turn in the rotation, so the day ends with full stack coverage.
+EVENING_LINKEDIN_TERM = "desarrollador fullstack"
+# Indeed is the slow, rate-limited source: it runs four times, not twelve.
+INDEED_HOURS = (9, 12, 15, 20)
+# The two HTML boards get their own hour so no single slot fires every source.
+# They run after noon on purpose: the panel is user-started, and a morning boot is
+# not guaranteed, so a midday pass keeps both sources reachable on a late start.
+WEREMOTO_HOUR = 12
+COMPUTRABAJO_HOUR = 13
 
 # Frontend-first, in Spanish and English, because the target roles are frontend
 # junior/trainee postings. A backend-only term like "node.js developer" pulls
@@ -93,6 +108,8 @@ LINKEDIN_TERMS = (
     "next.js developer",
     "pasantia desarrollo web",
     "react native junior",
+    "desarrollador typescript",
+    "react native developer",
 )
 INDEED_TERMS = ("desarrollador frontend", "frontend junior", "react developer")
 JOOBLE_TERMS = INDEED_TERMS
@@ -165,7 +182,7 @@ def in_collection_window(
 
 
 def linkedin_term_for(now: datetime, *, tz: str = DEFAULT_TIMEZONE) -> str:
-    """Rotate the LinkedIn search term once per hour across the seven slots."""
+    """Rotate the LinkedIn search term once per hour across the collection window."""
     local = _local(now, tz)
     slot = local.date().toordinal() * 24 + local.hour
     return LINKEDIN_TERMS[slot % len(LINKEDIN_TERMS)]
@@ -180,6 +197,7 @@ def due_plans(
     indeed_terms: Sequence[str] = INDEED_TERMS,
     ats_boards: Sequence[tuple[str, str, str]] = ATS_BOARDS,
     jooble_enabled: bool = False,
+    computrabajo_terms: Sequence[str] = COMPUTRABAJO_TERMS,
 ) -> list[SourcePlan]:
     """Build the plans due at ``now``; empty outside the window."""
     local = _local(now, tz)
@@ -187,7 +205,11 @@ def due_plans(
         return []
 
     slot = local.date().toordinal() * 24 + local.hour
-    term = linkedin_terms[slot % len(linkedin_terms)]
+    term = (
+        EVENING_LINKEDIN_TERM
+        if local.hour == EVENING_HOUR
+        else linkedin_terms[slot % len(linkedin_terms)]
+    )
     plans = [
         SourcePlan(
             name="linkedin",
@@ -220,7 +242,7 @@ def due_plans(
                 )
             )
 
-    if local.hour == ATS_HOUR:
+    if local.hour in DAILY_HOURS:
         for kind, slug, company in ats_boards:
             plans.append(
                 SourcePlan(
@@ -232,10 +254,10 @@ def due_plans(
                 )
             )
 
-    if local.hour == REMOTEOK_HOUR:
+    if local.hour in DAILY_HOURS:
         plans.append(SourcePlan(name="remoteok", kind="remoteok"))
 
-    if jooble_enabled and local.hour == JOOBLE_HOUR:
+    if jooble_enabled and local.hour in DAILY_HOURS:
         for term in JOOBLE_TERMS:
             plans.append(
                 SourcePlan(
@@ -247,6 +269,19 @@ def due_plans(
                         "page": 1,
                         "ResultOnPage": JOOBLE_RESULTS,
                     },
+                )
+            )
+
+    if local.hour == WEREMOTO_HOUR:
+        plans.append(SourcePlan(name="weremoto", kind="weremoto"))
+
+    if local.hour == COMPUTRABAJO_HOUR:
+        for term in computrabajo_terms:
+            plans.append(
+                SourcePlan(
+                    name=f"computrabajo:{term}",
+                    kind="computrabajo",
+                    params={"term": term},
                 )
             )
 
@@ -278,6 +313,8 @@ def adapt_rows(plan: SourcePlan, rows: Iterable[Mapping[str, Any]]) -> list[Norm
         return [from_remoteok_job(row) for row in rows]
     if plan.kind == "jooble":
         return [from_jooble_job(row) for row in rows]
+    if plan.kind in {"weremoto", "computrabajo"}:
+        return [from_web_page_job(row) for row in rows]
     raise ValueError(f"unknown source kind: {plan.kind}")
 
 
@@ -1013,6 +1050,13 @@ def build_scraper(
             return _fetch_remoteok(transport=request)
         if plan.kind == "jooble":
             return _fetch_jooble(plan, api_key=jooble_api_key, transport=request)
+        if plan.kind == "weremoto":
+            return fetch_weremoto(transport=request)
+        if plan.kind == "computrabajo":
+            term = str(plan.params.get("term") or "")
+            if not term:
+                raise ValueError("computrabajo plan without a search term")
+            return fetch_computrabajo(term, transport=request)
         return _fetch_ats(plan, transport=request)
 
     return scrape

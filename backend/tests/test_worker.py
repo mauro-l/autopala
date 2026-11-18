@@ -16,8 +16,10 @@ from app.models import JobSource, NormalizedJob
 from app.normalize import make_fingerprint, make_loose_key
 from app.scoring import ScoreBreakdown
 from app.worker import (
-    ATS_HOUR,
     COLLECTION_WINDOW,
+    DAILY_HOURS,
+    EVENING_HOUR,
+    EVENING_LINKEDIN_TERM,
     INDEED_HOURS,
     LINKEDIN_TERMS,
     MissingConfig,
@@ -178,8 +180,9 @@ class TestSchedule:
         assert in_collection_window(at(COLLECTION_WINDOW[1] - 1, 59)) is True
 
     def test_the_terms_rotate_every_hour_and_never_leave_the_list(self) -> None:
-        seen = {linkedin_term_for(at(hour)) for hour in range(COLLECTION_WINDOW[0], COLLECTION_WINDOW[1])}
-        assert len(seen) == COLLECTION_WINDOW[1] - COLLECTION_WINDOW[0]
+        rotation = range(COLLECTION_WINDOW[0], EVENING_HOUR)
+        seen = {linkedin_term_for(at(hour)) for hour in rotation}
+        assert len(seen) == len(rotation)
         assert seen <= set(LINKEDIN_TERMS)
 
     def test_the_rotation_keeps_advancing_across_days(self) -> None:
@@ -191,13 +194,14 @@ class TestSchedule:
 
     def test_nothing_is_due_outside_the_window(self) -> None:
         assert due_plans(at(7)) == []
+        assert due_plans(at(COLLECTION_WINDOW[1])) == []
         assert due_plans(at(22)) == []
 
-    def test_the_ats_boards_run_only_on_the_first_hour(self) -> None:
-        first = due_plans(at(ATS_HOUR))
-        later = due_plans(at(ATS_HOUR + 1))
-        assert any(p.kind != "jobdrop" for p in first)
-        assert not any(p.kind != "jobdrop" for p in later)
+    def test_the_ats_boards_run_only_on_the_daily_hours(self) -> None:
+        for hour in DAILY_HOURS:
+            assert any(p.kind in {"greenhouse", "ashby"} for p in due_plans(at(hour)))
+        later = due_plans(at(DAILY_HOURS[0] + 1))
+        assert not any(p.kind in {"greenhouse", "ashby"} for p in later)
 
     def test_indeed_runs_only_on_its_assigned_hours(self) -> None:
         assert any(p.name == "indeed" for p in due_plans(at(INDEED_HOURS[0])))
@@ -216,8 +220,8 @@ class TestSchedule:
             assert "hours_old" not in candidate.params
 
     def test_public_sources_are_daily_optional_and_exclude_project_only_sites(self) -> None:
-        enabled = due_plans(at(ATS_HOUR), jooble_enabled=True)
-        disabled = due_plans(at(ATS_HOUR))
+        enabled = due_plans(at(DAILY_HOURS[0]), jooble_enabled=True)
+        disabled = due_plans(at(DAILY_HOURS[0]))
 
         assert any(candidate.kind == "remoteok" for candidate in enabled)
         assert len([candidate for candidate in enabled if candidate.kind == "jooble"]) == 3
@@ -225,8 +229,21 @@ class TestSchedule:
         assert not any(candidate.name in {"workana", "freelancer"} for candidate in enabled)
         assert not any(
             candidate.kind in {"remoteok", "jooble"}
-            for candidate in due_plans(at(ATS_HOUR + 1), jooble_enabled=True)
+            for candidate in due_plans(at(DAILY_HOURS[0] + 1), jooble_enabled=True)
         )
+
+
+    def test_the_evening_pass_runs_the_full_daily_set_with_a_fixed_term(self) -> None:
+        evening = due_plans(at(EVENING_HOUR), jooble_enabled=True)
+        names = [p.name for p in evening]
+
+        linkedin = [p for p in evening if p.name == "linkedin"]
+        assert len(linkedin) == 1
+        assert linkedin[0].params["search_term"] == EVENING_LINKEDIN_TERM
+        assert names.count("indeed") == 3
+        assert {"greenhouse:anthropic", "ashby:linear", "remoteok"} <= set(names)
+        assert len([name for name in names if name.startswith("jooble:")]) == 3
+        assert evening[0].name == "linkedin"
 
 
 class TestPayload:
@@ -374,7 +391,7 @@ class TestPublicApiScrapers:
             "SUPABASE_SERVICE_ROLE_KEY": "service-secret",
         }
         assert WorkerConfig.from_env(base_env).jooble_api_key is None
-        assert not any(p.kind == "jooble" for p in due_plans(at(ATS_HOUR)))
+        assert not any(p.kind == "jooble" for p in due_plans(at(DAILY_HOURS[0])))
 
         no_key_calls: list[str] = []
         no_key_scraper = build_scraper(

@@ -42,7 +42,7 @@ Acceptance: Tests prove absent-key behavior, no secret in run-plan params or con
 ## Tasks
 - T1 — Verify and record source-by-source access, relevance, policy constraints, and source shape (S1-S3); route: inline; status: completed; evidence: L5-L6; commit: N/A.
 - T2 — Implement/test compatible public API adapters and optional Jooble configuration (S3-S6); route: inline; status: pending (paused by user; pytest unavailable; test scope updated in L10); Risk: item 2 (handles an optional third-party API key); commit: pending.
-- T3 — Implement/test only the public-page adapters approved by T1 (S2-S5); route: inline; status: pending; commit: pending.
+- T3 — Implement/test only the public-page adapters approved by T1 (S2-S5); route: inline; status: completed; evidence: L13; commit: bd7d7d7.
 - T4 — Verify the complete source matrix, pipeline non-regression, and documentation; route: inline; status: pending; commit: pending.
 
 ## Log
@@ -94,3 +94,36 @@ The user said “demasiados test para esto..” and selected “Sí, recortar a 
 
 ### L11 — No package installation
 The user stated: “te aviso desde ya que no se va instalar pytest ni pip”. Do not install pytest, pip, or other test dependencies. The feature remains paused; on resumption, use only already-available verification tools and report clearly that these checks do not constitute a pytest run.
+
+### L12 — Collection window extended to 19:00
+User request, verbatim: "ok, vamos a continuar con la implementacion T3. para eso antes debemos expandir el horario de busqueda. que la ultima busqueda lo haga a las 19.00 y ahi termina en vez de las 16.00"
+
+`COLLECTION_WINDOW` moved from `(9, 16)` to `(9, 20)`, so the last slot starts at 19:00 and collection stops at 20:00; the window had eleven slots instead of seven. `LINKEDIN_TERMS` grew from 9 to 11 entries (`desarrollador typescript`, `react native developer`) because `test_the_terms_rotate_every_hour_and_never_leave_the_list` requires one distinct term per slot in the window; the list still does not divide 24. `INDEED_HOURS`, `ATS_HOUR`, `REMOTEOK_HOUR` and `JOOBLE_HOUR` are unchanged. Observed with the real clock helpers: 19:00 in-window with a LinkedIn plan, 20:00 out of window with no plans, 11 distinct terms across the day. `AGENTS.md` records the new window.
+
+### L13 — T3 public-page adapters
+Implemented `backend/app/pages.py` with two stdlib `HTMLParser` adapters and `from_web_page_job` in `backend/app/models.py`; `due_plans` schedules `weremoto` at 10 and three `computrabajo:<term>` plans at 11, and `build_scraper` routes both kinds.
+
+Live probe, one request per site: WeRemoto 200 with 30 server-rendered cards (title, company, modality/country badge, `18 nov`, contract type and the full description inside `details`); CompuTrabajo 200 with 20 cards per term and an absolute offer URL. The other T1 page candidates are blocked or excluded, not deferred: Remoters answered HTTP 520 twice, Laborum is a JavaScript-only shell, Domestika returned HTTP 403, and SoyFreelancer has no employment listing (`/empleos` is 404; only `/trabajos-freelance` projects exist and its detail pages are disallowed by robots), so it stays excluded under S2. CompuTrabajo's robots allows the `/trabajo-de-…` listing and disallows only `Ajax`, `_services` and the faceted query variants, which the adapter never calls; WeRemoto allows `/` except `/diagnostics`.
+
+Verification observed: `backend/.venv/bin/python -m pytest backend/tests` reports **304 passed**, including the four new `backend/tests/test_pages.py` cases (planning, WeRemoto card mapping, CompuTrabajo card mapping, dropped invalid cards plus non-200 failures). No package was installed: that pre-existing virtualenv already carried pytest 9.2.0, so L11's no-install rule is respected. Both parsers were additionally run against the saved live pages: 30/30 WeRemoto rows with title, company, date and description; 20/20 CompuTrabajo rows with title, company, location and posted date. Committed as `bd7d7d7`. One real CompuTrabajo card needed the plain-text employer fallback, and "Hace 22 horas" plus "Hace 6 días" both map to the stored `date`.
+
+### L14 — Evening full pass at 20:00
+User request, verbatim: "me gustaria agregar una mas, hacemos una ultima a las 20? o 19.59 pero que sea linkedin='desarrollador fullstack' + indeed×3, greenhouse, ashby, remoteok, jooble×3. mientras pensemos una solucion para el remoto."
+
+Chose 20:00, not 19:59: the loop wakes on the full hour (`seconds_until_next_hour`), so a 19:59 slot would need sub-hour scheduling for no gain. `COLLECTION_WINDOW` moved to `(9, 21)` — twelve slots, last run 20:00 — and a new `DAILY_HOURS = (9, 20)` gate drives the ATS boards, Remote OK and Jooble, while `INDEED_HOURS` gained 20. `EVENING_HOUR = 20` uses the fixed `EVENING_LINKEDIN_TERM = "desarrollador fullstack"` instead of taking a turn in the rotation, so `LINKEDIN_TERMS` stays at 11: a twelfth term would divide 24 and hand the same term to the same hour every day.
+
+Verification observed: `backend/.venv/bin/python -m pytest backend/tests` reports **305 passed**; the new `test_the_evening_pass_runs_the_full_daily_set_with_a_fixed_term` pins the 20:00 plan set, and the rotation test now iterates only the rotation hours. Printed schedule for one day: 20:00 = `desarrollador fullstack` + `indeed`×3 + `greenhouse:anthropic` + `ashby:linear` + `remoteok` + `jooble`×3; 21:00 is out of window.
+
+### L15 — Remote hosting evidence
+Render (docs + pricing, checked 2026-11-18): free compute covers **web services only**. Cron jobs and background workers have no free plan — billing starts at the first minute, with a US$1/month minimum per cron job service and about US$7/month for the cheapest 0.5 vCPU worker. A free web service spins down after 15 idle minutes, has 750 instance-hours per workspace per month, cannot use a persistent disk, and may be restarted at any time.
+
+Northflank Sandbox (pricing + docs, checked 2026-11-18): free, no card, **2 services, 2 jobs, 1 database, always on with no sleeping, up to US$20/month of resources**. Cron jobs are allowed on the free plan with a `@hourly` schedule and a per-job time limit, which fits `--once` perfectly. This corrects the earlier claim that GitHub Actions was the only free route; the open risk that remains for every remote host is the source IP, not the compute.
+
+### L16 — The HTML boards move after noon
+User decision: "vamos por la 1 y por mi parte voy a investigar un scrip o algo para automatizar la pc y que se prenda sola a determinada hora."
+
+`WEREMOTO_HOUR` moved from 10 to 12 and `COMPUTRABAJO_HOUR` from 11 to 13, because the panel is user-started and a morning boot is not guaranteed; the morning slots stay as a bonus for days the PC is on early, and the 20:00 pass still does not repeat these two. Measured consequence: a slot is a whole hour, not a 60-second window, because `run_forever` evaluates `due_plans` as soon as it starts. Starting the panel at 12:05 or 12:59 still runs LinkedIn + Indeed x3 + WeRemoto; at 13:30 it still runs LinkedIn + CompuTrabajo x3. A 12:00 start therefore covers every source in the plan.
+
+Verification observed: `backend/.venv/bin/python -m pytest backend/tests` reports **305 passed**; the page-adapter test reads the hour constants instead of literals, so it followed the move without an edit.
+
+Open decision flagged, not changed: the user is investigating an automatic PC start. `AGENTS.md` records "nothing autostarts: no systemd unit, no cron, no linger" as a deliberate choice of the panel, and the environment rule forbids generating Windows Task Scheduler tasks or `.bat` files, so that investigation reopens a recorded decision rather than adding a script.

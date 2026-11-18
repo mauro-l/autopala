@@ -102,6 +102,11 @@ def _http_url(value: object) -> str | None:
     return text
 
 
+def absolute_http_url(value: object) -> str | None:
+    """Public view of the HTTP(S) validator, for adapters that must drop bad rows."""
+    return _http_url(value)
+
+
 def strip_html(value: object) -> str:
     """Unescape and strip HTML, keeping one space where a tag used to be.
 
@@ -316,6 +321,29 @@ def from_jooble_job(job: Mapping[str, Any]) -> NormalizedJob:
             source_job_id=_clean_str(job.get("id")),
             # Jooble's search result link is its own listing, not a direct apply URL.
             url_direct=_http_url(job.get("apply_url")),
+        ),
+        raw=job,
+    )
+
+
+def from_web_page_job(job: Mapping[str, Any]) -> NormalizedJob:
+    """Build a job from one card parsed out of a public HTML listing page."""
+    return _build(
+        company=job.get("company"),
+        title=job.get("title"),
+        location=job.get("location"),
+        is_remote=job.get("is_remote"),
+        description=job.get("description"),
+        posted_at=job.get("posted_at"),
+        # Neither board exposes a salary on its listing page.
+        salary_min=None,
+        salary_max=None,
+        salary_currency=None,
+        job_type=job.get("job_type"),
+        source=JobSource(
+            source=_clean_str(job.get("source")) or "web",
+            url=absolute_http_url(job.get("url")) or "",
+            source_job_id=_clean_str(job.get("source_job_id")),
         ),
         raw=job,
     )

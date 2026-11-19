@@ -68,6 +68,7 @@ from app.push import (
     WebPushNotifier,
     deliver_push_notifications,
 )
+from app.roles import is_technology_role
 from app.scoring import ScoreBreakdown, is_stale, score_job, should_notify
 
 LOG = logging.getLogger(__name__)
@@ -90,6 +91,12 @@ INDEED_HOURS = (9, 12, 15, 20)
 # not guaranteed, so a midday pass keeps both sources reachable on a late start.
 WEREMOTO_HOUR = 12
 COMPUTRABAJO_HOUR = 13
+
+# Offers older than this are deleted from ``jobs`` at the end of every collection
+# run. Age is measured from ``posted_at`` when the source gave one, otherwise from
+# ``first_seen_at``; ``last_seen_at`` is never used, because the worker refreshes it
+# for every row it re-scrapes and a week offline would then wipe the whole table.
+RETENTION_DAYS = 7
 
 # Frontend-first, in Spanish and English, because the target roles are frontend
 # junior/trainee postings. A backend-only term like "node.js developer" pulls
@@ -721,6 +728,43 @@ class SupabaseWriter:
             prefer="return=minimal",
         )
 
+    def purge_expired_jobs(
+        self,
+        *,
+        older_than_days: int = RETENTION_DAYS,
+        today: date | None = None,
+    ) -> int:
+        """Delete offers whose own date is older than the retention window.
+
+        The cutoff is ``posted_at`` when the source published one, otherwise
+        ``first_seen_at``: a row without a posting date must still age out, but by
+        when we first saw it, never by ``last_seen_at``. One request, so a cleanup
+        costs a single round trip per run. Returns how many rows were deleted.
+
+        ``job_state`` cascades on ``job_id``, so a purge also drops the triage
+        flags of any offer that ages out.
+        """
+        if today is not None:
+            cutoff = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+        else:
+            cutoff = self.clock()
+        cutoff = cutoff - timedelta(days=older_than_days)
+        date_bound = cutoff.date().isoformat()
+        instant_bound = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # PostgREST cannot compare a `date` column against a timestamp or the other
+        # way round, so the two age clocks get one arm each.
+        raw = self._call(
+            "DELETE",
+            "jobs?or=(and(posted_at.not.is.null,"
+            f"posted_at.lt.{date_bound}),"
+            "and(posted_at.is.null,"
+            f"first_seen_at.lt.{instant_bound}))"
+            "&select=id",
+            prefer="return=representation",
+        )
+        parsed = json.loads(_decode(raw)) if raw else []
+        return len(parsed) if isinstance(parsed, list) else 0
+
 
 class RecordingWriter:
     """A writer that records instead of writing, for dry runs and tests."""
@@ -829,6 +873,8 @@ class RunResult:
     errors: list[str] = field(default_factory=list)
     failed: int = 0
     stale: int = 0
+    off_topic: int = 0
+    purged: int = 0
 
 
 def run_collection(
@@ -880,6 +926,13 @@ def run_collection(
                     continue
                 if not job.title.strip():
                     dropped += 1
+                    continue
+                # A firehose board returns tutors, cold callers and dental
+                # assistants. Dropping them here keeps enrichment's capped
+                # detail fetches for real candidates and keeps them out of the
+                # database. A title the gate cannot judge is kept.
+                if not is_technology_role(job.title):
+                    result.off_topic += 1
                     continue
                 kept.append(job)
             if dropped:
@@ -934,7 +987,26 @@ def run_collection(
         if should_notify(breakdown.total):
             result.notify.append(scored)
 
+    result.purged = _purge_expired_offers(writer, reference)
+
     return result
+
+
+def _purge_expired_offers(writer: Any, reference: date) -> int:
+    """Drop expired offers, never failing the run that just succeeded.
+
+    A writer without ``purge_expired_jobs`` is left alone: ``RecordingWriter``,
+    which every dry run uses, deliberately has no such method, so ``--dry-run``
+    can never delete a row.
+    """
+    purge = getattr(writer, "purge_expired_jobs", None)
+    if purge is None:
+        return 0
+    try:
+        return int(purge(today=reference))
+    except Exception as exc:  # a failed cleanup must not lose a good collection
+        LOG.warning("retention purge failed: %s", exc)
+        return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -1137,11 +1209,14 @@ def run_forever(
                     max_fetches=max_fetches,
                 )
                 LOG.info(
-                    "run finished: %d plans, %d offers, %d notify, %d stale, %d failed",
+                    "run finished: %d plans, %d offers, %d notify, %d stale,"
+                    " %d off-topic, %d purged, %d failed",
                     len(result.runs),
                     len(result.jobs),
                     len(result.notify),
                     result.stale,
+                    result.off_topic,
+                    result.purged,
                     result.failed,
                 )
                 _send_notifications(result, notifier=notifier, writer=writer)
@@ -1202,10 +1277,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_fetches=args.max_fetches,
     )
     LOG.info(
-        "%d offers, %d to notify, %d stale dropped",
+        "%d offers, %d to notify, %d stale dropped, %d off-topic dropped, %d expired purged",
         len(result.jobs),
         len(result.notify),
         result.stale,
+        result.off_topic,
+        result.purged,
     )
     _send_notifications(result, notifier=notifier, writer=writer)
     return 0

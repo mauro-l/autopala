@@ -663,15 +663,31 @@ class TestRunCollection:
     def test_a_writer_failure_does_not_abort_the_remaining_offers(self) -> None:
         class FlakyWriter(FakeWriter):
             def upsert_job(self, payload: dict) -> str:
-                if payload["title"] == "Cocinero":
+                if payload["title"] == "Analista Funcional Jr":
                     raise RuntimeError("postgrest said no")
                 return super().upsert_job(payload)
 
         writer = FlakyWriter()
-        rows = [dict(INDEED_ROW, title="Cocinero", id="weak-1"), INDEED_ROW]
+        rows = [dict(INDEED_ROW, title="Analista Funcional Jr", id="weak-1"), INDEED_ROW]
         result = run_collection([plan("indeed")], scrape=FakeScraper({"indeed": rows}), writer=writer, today=TODAY)
         assert len(writer.payloads) == 1
         assert result.failed == 1
+
+    def test_an_off_topic_title_never_reaches_the_writer(self) -> None:
+        writer = FakeWriter()
+        rows = [
+            dict(INDEED_ROW, title="Tutor/a online de Matemáticas", id="noise-1"),
+            INDEED_ROW,
+        ]
+        result = run_collection(
+            [plan("indeed")],
+            scrape=FakeScraper({"indeed": rows}),
+            writer=writer,
+            today=TODAY,
+        )
+        assert [payload["title"] for payload in writer.payloads] == ["Desarrollador Junior React"]
+        assert result.off_topic == 1
+        assert result.jobs and all(job.job.title != "Tutor/a online de Matemáticas" for job in result.jobs)
 
     def test_the_run_result_records_every_plan_it_was_given(self) -> None:
         result = run_collection(
@@ -689,6 +705,44 @@ class TestRunCollection:
         assert len(recorder.payloads) == 1
         assert result.jobs[0].job_id == "dry-run-1"
         assert recorder.scores == []
+
+    def test_a_collection_run_purges_expired_offers_with_its_reference_date(self) -> None:
+        class PurgingWriter(FakeWriter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.purged_with: list[date | None] = []
+
+            def purge_expired_jobs(self, *, today: date | None = None) -> int:
+                self.purged_with.append(today)
+                return 4
+
+        writer = PurgingWriter()
+        result = run_collection(
+            [plan("indeed")],
+            scrape=FakeScraper({"indeed": [INDEED_ROW]}),
+            writer=writer,
+            today=TODAY,
+        )
+        assert writer.purged_with == [TODAY]
+        assert result.purged == 4
+
+    def test_a_failing_purge_does_not_abort_the_run(self) -> None:
+        class BrokenPurge(FakeWriter):
+            def purge_expired_jobs(self, *, today: date | None = None) -> int:
+                raise RuntimeError("postgrest said no")
+
+        writer = BrokenPurge()
+        result = run_collection(
+            [plan("indeed")],
+            scrape=FakeScraper({"indeed": [INDEED_ROW]}),
+            writer=writer,
+            today=TODAY,
+        )
+        assert len(writer.payloads) == 1
+        assert result.purged == 0
+
+    def test_a_recording_writer_has_no_purge_so_a_dry_run_never_deletes(self) -> None:
+        assert not hasattr(RecordingWriter(), "purge_expired_jobs")
 
 
 class TestEnvAndConfig:
@@ -817,6 +871,42 @@ class TestSupabaseWriter:
         assert url.endswith("/rest/v1/jobs?id=eq.uuid-1")
         assert json.loads(body)["score"] == 90
         assert headers["Prefer"] == "return=minimal"
+
+    def test_expired_offers_are_deleted_in_one_call(self) -> None:
+        calls = []
+
+        def transport(method, url, headers, body):
+            calls.append((method, url, headers, body))
+            return 200, b'[{"id": "a"}, {"id": "b"}]'
+
+        writer = SupabaseWriter("https://example.supabase.co", "secret", transport=transport)
+        assert writer.purge_expired_jobs(today=TODAY) == 2
+        method, url, headers, body = calls[0]
+        assert method == "DELETE"
+        assert body is None
+        assert headers["Prefer"] == "return=representation"
+        assert "select=id" in url
+        # TODAY is 2026-11-11, so the window keeps everything from 11-04 on. The
+        # slugless rows fall back to first_seen_at, which is a timestamp.
+        assert "and(posted_at.not.is.null,posted_at.lt.2026-11-04)" in url
+        assert "and(posted_at.is.null,first_seen_at.lt.2026-11-04T00:00:00Z)" in url
+
+    def test_the_retention_cutoff_defaults_to_seven_days_before_now(self) -> None:
+        urls: list[str] = []
+
+        def transport(method, url, headers, body):
+            urls.append(url)
+            return 200, b"[]"
+
+        writer = SupabaseWriter(
+            "https://example.supabase.co",
+            "secret",
+            transport=transport,
+            clock=lambda: datetime(2026, 11, 19, 15, 30, tzinfo=timezone.utc),
+        )
+        assert writer.purge_expired_jobs() == 0
+        assert "posted_at.lt.2026-11-12" in urls[0]
+        assert "first_seen_at.lt.2026-11-12T15:30:00Z" in urls[0]
 
     def test_starting_a_run_returns_the_generated_row_id(self) -> None:
         def transport(method, url, headers, body):
